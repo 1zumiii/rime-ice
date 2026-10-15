@@ -106,6 +106,21 @@ local function load_llm(env)
     local idle = sc:get_int("llm_rerank/idle_unload_minutes")
     if idle == nil then idle = 20 end
     cpp.idle_unload_sec = math.max(0, idle) * 60
+    -- Android：Trime 在亮屏/熄屏时设置 Rime 选项 screen_off；转给常驻推理进程，熄屏后它会更快卸载模型（其他平台没有这个函数）
+    if cpp.screen_off then
+        env.engine.context.option_update_notifier:connect(function(c, name)
+            if name == "screen_off" then pcall(cpp.screen_off, c:get_option("screen_off")) end
+        end)
+    end
+    -- Android：手动启停。方案开关 ai_rerank（工具栏的 AI 徽标点一下就是切它）同步给常驻推理进程：
+    -- 关 = 立刻卸载模型并拒绝一切推理（进程只剩待命，不占 CPU）；开 = 允许按需加载。启动时也同步一次当前状态。
+    if cpp.set_enabled then
+        local c = env.engine.context
+        c.option_update_notifier:connect(function(cc, name)
+            if name == "ai_rerank" then pcall(cpp.set_enabled, cc:get_option("ai_rerank")) end
+        end)
+        pcall(cpp.set_enabled, c:get_option("ai_rerank"))
+    end
     llm_prep = cpp
     _G.ai_rerank_llm = cpp
 end
@@ -153,10 +168,10 @@ local function processor(key, env)
     if key:release() then return 2 end
 
     local ctx = env.engine.context
-    -- 开关关闭：不加载、不记录
-    if not ctx:get_option("ai_rerank") then return 2 end
-
+    -- 开关关闭：不加载模型、不记录
+    -- 先加载模块（不加载模型）：开关处于关闭状态时，也要把"关"同步给常驻推理进程
     if not llm_prep then load_llm(env) end
+    if not ctx:get_option("ai_rerank") then return 2 end
 
     -- 每次按键刷新“最近使用”时间，避免只打短输入（不触发重排）时被误判为空闲而卸载模型
     if llm_prep and llm_prep.touch then llm_prep.touch() end
