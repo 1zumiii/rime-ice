@@ -20,7 +20,7 @@ fi
 # 排除项：用户数据（词频库、同步、安装信息）、构建产物、冷词记录、最近使用记录、仓库自身文件
 rsync -av $DRY \
   --exclude='.git/' --exclude='.github/' --exclude='.gitignore' --exclude='.DS_Store' \
-  --exclude='others/' --exclude='AGENTS.md' --exclude='README.md' --exclude='README.en.md' --exclude='README.upstream.md' --exclude='LICENSE' \
+  --exclude='others/' --exclude='AGENTS.md' --exclude='README.md' --exclude='README.upstream.md' --exclude='LICENSE' \
   --exclude='install.sh' --exclude='tools/' --exclude='windows/' --exclude='llm-mac/' --exclude='recipe.yaml' \
   --exclude='build/' --exclude='sync/' --exclude='*.userdb/' \
   --exclude='installation.yaml' --exclude='user.yaml' \

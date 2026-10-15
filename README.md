@@ -1,10 +1,13 @@
 <h1 align="center">雾凇拼音 · 1zumiii Edition</h1>
 
-<p align="center">简体中文 · <a href="README.en.md">English</a></p>
-
 <p align="center">
   基于 <a href="https://github.com/iDvel/rime-ice">雾凇拼音（rime-ice）</a> 的个人定制版本：最近使用优先、本地小模型 AI 重排、语法模型、模糊音，以及配套的鼠须管（macOS）、小狼毫（Windows）和同文输入法 Trime（Android）配置。<br>
   上游原版的说明保留在 <a href="README.upstream.md">README.upstream.md</a>。
+</p>
+
+<p align="center">
+  <img src="llm-android/docs/preview.png" alt="Android（同文输入法 Trime）预览：GBoard 风格主页面、AI 重排的候选" width="900"><br>
+  <sub>Android（Trime）预览：GBoard 风格布局，工具栏的 <code>● AI</code> 是 AI 重排的状态和开关；候选后面的 <code>◇</code> 表示这个首选是按上文重排出来的。</sub>
 </p>
 
 ---

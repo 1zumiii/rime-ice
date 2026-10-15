@@ -27,7 +27,7 @@ if (-not $DryRun) {
 }
 
 # 2. files that must never be overwritten
-$xf = @("README.md","README.en.md","README.upstream.md","LICENSE","AGENTS.md",".gitignore","install.sh","recipe.yaml",
+$xf = @("README.md","README.upstream.md","LICENSE","AGENTS.md",".gitignore","install.sh","recipe.yaml",
         "squirrel.yaml","squirrel.custom.yaml","rime_ice.custom.yaml","installation.yaml","user.yaml",
         "weasel.yaml",
         "recent_words.tsv","custom_phrase.txt","user_freq.tsv",
