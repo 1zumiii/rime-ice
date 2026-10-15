@@ -213,6 +213,25 @@ do
   check("J. short rest (<4 letters): no two-stage", ys[1].comment ~= "◈", table.concat(texts, ","))
 end
 
+
+-- K: 模型被空闲卸载之后，正常打字能自动恢复重排（处理器触发重新加载与预解码）
+do
+  hist = { "我最近没有太多" }
+  _G.llm_filter_cache = nil
+  _G.ai_rerank_llm.idle_unload_sec = 2
+  _G.ai_rerank_llm.score("你好", { "世界", "是借" })     -- 刷新“最近使用”时间
+  os.execute("sleep 4.5")
+  check("K. model unloaded after idle", _G.ai_rerank_llm.is_ready() == false)
+  local cands = { mk("经理", 0, 6), mk("经历", 0, 6), mk("精力", 0, 6), mk("敬礼", 0, 6), mk("警力", 0, 6) }
+  local texts = run(mk_env("jingli", hist, true), cands)
+  check("K. while unloaded: order kept, no blocking", table.concat(texts, ",") == "经理,经历,精力,敬礼,警力", table.concat(texts, ","))
+  -- 接下来每次按键处理器都会触发加载 → 加载完成后补预解码；模拟几次按键
+  for i = 1, 6 do press(mk_env("", hist, true), "k" .. i) end
+  texts = run(mk_env("jingli", hist, true), cands)
+  check("K. after reload + prepare: reranking resumes", texts[1] == "精力", table.concat(texts, ","))
+  _G.ai_rerank_llm.idle_unload_sec = 0
+end
+
 -- F: 单字母输入不触发（默认 code_pattern [a-z]{3,}）
 do
   local cands = { mk("的", 0, 1), mk("地", 0, 1), mk("得", 0, 1) }

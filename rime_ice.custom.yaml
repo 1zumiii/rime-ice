@@ -76,6 +76,7 @@ patch:
     expected_length_weight: 0   # 全拼保持 0
     freq_beta: 1.5
     scan_limit: 80
+    idle_unload_minutes: 20     # 空闲这么多分钟没打字就卸载模型（还回约 320 MB 内存），下次打字自动加载（约 1 秒）；0 = 不卸载
     badge: "◇"                  # AI 按上文重排后的首选（单字符省空间）
     badge2: "◈"                 # 两阶段拼出来的首选（四字 = 两个两字词）
     # debug_latency: true      # 排查用：只记录跳过原因和耗时（llm_errors.txt / llm_latency.txt），不含任何输入文字

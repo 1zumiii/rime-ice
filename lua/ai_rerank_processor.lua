@@ -3,6 +3,7 @@
 -- 作用：加载 rime_llm.so；维护"上文"（本会话内上屏的词）；每次按键后异步预解码；编辑键后重置上文。
 -- 开关：方案开关 ai_rerank。关闭时本处理器直接放行，不加载、不记录。
 -- 隐私：不写任何文件。上文只存在内存里，来自 Rime 自己的 commit_history，不读取任何应用里的文字。
+-- 配置（llm_rerank 节点）：idle_unload_minutes 空闲多少分钟后卸载模型，默认 20，0 = 不卸载。
 -- 在 engine/processors 增加 - lua_processor@*ai_rerank_processor（放在最前面）
 
 local history = {}       -- 当前会话上屏词序列（base 之后）
@@ -57,8 +58,9 @@ _G.ai_rerank_context_get = get_context
 local function trigger_prepare()
     local cur_ctx = get_context():gsub('%s+', '')
     if llm_prep and llm_prep.prepare and cur_ctx ~= last_prep_ctx then
-        last_prep_ctx = cur_ctx
-        llm_prep.prepare(cur_ctx)
+        -- prepare 返回 true 才表示预解码真的排上了。模型还没加载好（刚启动、或被空闲卸载后）时它只会触发加载并返回 false，
+        -- 这种情况不能记成"已预解码"，否则模型加载完成后上文没变，就再也不会补预解码。
+        if llm_prep.prepare(cur_ctx) then last_prep_ctx = cur_ctx end
     end
 end
 
@@ -83,6 +85,11 @@ local function load_llm(env)
     local cores = sc:get_int("llm_rerank/cpu_cores")
     if cores then cpp.n_threads = cores end
     if ud then cpp.log_dir = ud end                    -- 日志只含模型路径与耗时，不含输入内容
+    -- 空闲多少分钟没用就卸载模型（释放约 320 MB 内存），下次打字时自动加载回来（约 0.5~1 秒，期间不重排）。
+    -- 0 = 不卸载。默认 20 分钟。
+    local idle = sc:get_int("llm_rerank/idle_unload_minutes")
+    if idle == nil then idle = 20 end
+    cpp.idle_unload_sec = math.max(0, idle) * 60
     llm_prep = cpp
     _G.ai_rerank_llm = cpp
 end
@@ -135,8 +142,15 @@ local function processor(key, env)
 
     if not llm_prep then load_llm(env) end
 
+    -- 每次按键刷新“最近使用”时间，避免只打短输入（不触发重排）时被误判为空闲而卸载模型
+    if llm_prep and llm_prep.touch then llm_prep.touch() end
+
     -- 输入已清空（上屏/取消）：退格检测的状态归零
     if ctx.input == "" then _G.ai_rerank_state = nil end
+
+    -- 模型被空闲卸载（或还在加载）：清掉"已预解码"的记录，这样 prepare 会触发加载，
+    -- 加载完成后的下一次按键立刻补上预解码。
+    if llm_prep and llm_prep.is_ready and not llm_prep.is_ready() then last_prep_ctx = "" end
 
     -- 上文变化 → 立即异步预解码
     trigger_prepare()

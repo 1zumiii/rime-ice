@@ -186,5 +186,126 @@ patch("    lua_pushcfunction(L, lua_newindex);\n    lua_setfield(L, -2, \"__newi
       "    lua_pushcfunction(L, lua_gc_module);   // 模块卸载 / Lua 状态关闭时释放模型\n"
       "    lua_setfield(L, -2, \"__gc\");")
 
+
+# ---- 空闲自动卸载：超过 idle_unload_sec 没有任何 score/prepare 调用，就释放模型与上下文 ----
+# 下次 prepare/score 会懒加载回来（约 0.5~1 秒，期间不重排，不阻塞输入）。0 = 关闭（默认，Lua 侧按配置设置）。
+patch("static std::atomic<bool> g_atexit_registered{false};",
+      r"""// ---- 空闲自动卸载 ----
+static std::atomic<long long> g_last_use_ms{0};
+static std::atomic<long long> g_idle_unload_ms{0};
+static std::atomic<bool>      g_idle_stop{false};
+static std::atomic<bool>      g_idle_thread_started{false};
+// 这两个对象故意泄漏（堆上分配、不析构）：进程退出时 detached 线程可能还在用它们，不能让静态析构先销毁
+static std::mutex              & g_idle_mu = *new std::mutex;
+static std::condition_variable & g_idle_cv = *new std::condition_variable;
+
+static long long now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+static void touch_use() { g_last_use_ms.store(now_ms()); }
+
+static void idle_watchdog() {
+    std::unique_lock<std::mutex> lk(g_idle_mu);
+    while (!g_idle_stop.load()) {
+        long long limit = g_idle_unload_ms.load();
+        if (limit <= 0 || !g_loaded.load()) { g_idle_cv.wait(lk); continue; }   // 没有要盯的：一直睡到被唤醒
+        long long since = now_ms() - g_last_use_ms.load();
+        if (since < limit) {                                                   // 睡到最早可能过期的时刻再看
+            g_idle_cv.wait_for(lk, std::chrono::milliseconds(limit - since + 50));
+            continue;
+        }
+        // 超过空闲时限：只在没有人持锁（没有打分/预解码在跑）时卸载，并在锁内再确认一次
+        std::unique_lock<std::mutex> m(g_mutex, std::try_to_lock);
+        if (m.owns_lock() && g_loaded.load() && now_ms() - g_last_use_ms.load() >= limit) {
+            if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
+            if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+            g_vocab = nullptr;
+            g_loaded.store(false);
+            g_prep_ready = false;
+            g_prep_ctx.clear();
+            g_prep_logits.clear();
+            log_msg("model unloaded (idle %lld s)", limit / 1000);
+        } else {
+            g_idle_cv.wait_for(lk, std::chrono::seconds(5));                   // 有人在用：稍后再看
+        }
+    }
+}
+static void ensure_idle_watchdog() {
+    if (!g_idle_thread_started.exchange(true)) std::thread(idle_watchdog).detach();
+    g_idle_cv.notify_all();
+}
+
+static std::atomic<bool> g_atexit_registered{false};""")
+patch("static void cleanup_at_exit() {\n    unload_model();",
+      "static void cleanup_at_exit() {\n    g_idle_stop.store(true);\n    g_idle_cv.notify_all();\n    unload_model();")
+patch("        if (!g_atexit_registered.exchange(true)) std::atexit(cleanup_at_exit);\n",
+      "        if (!g_atexit_registered.exchange(true)) std::atexit(cleanup_at_exit);\n        touch_use();\n        ensure_idle_watchdog();   // 模型已加载：唤醒空闲计时线程\n")
+patch("static int lua_prepare(lua_State * L) {\n", "static int lua_prepare(lua_State * L) {\n    touch_use();\n")
+patch("static int lua_score(lua_State * L) {\n",   "static int lua_score(lua_State * L) {\n    touch_use();\n")
+patch("static int lua_index(lua_State * L) {",
+      "// 每次按键由 Lua 处理器调用：刷新“最近使用”时间（只做一次原子写，几乎没有开销）\n"
+      "static int lua_touch(lua_State * L) { (void)L; touch_use(); return 0; }\n\n"
+      "static int lua_index(lua_State * L) {")
+patch("    else if (strcmp(key, \"n_seq_max\") == 0) lua_pushinteger(L, g_n_seq_max);\n    else lua_pushnil(L);",
+      "    else if (strcmp(key, \"n_seq_max\") == 0) lua_pushinteger(L, g_n_seq_max);\n    else if (strcmp(key, \"touch\") == 0) lua_pushcfunction(L, lua_touch);\n    else if (strcmp(key, \"idle_unload_sec\") == 0) lua_pushinteger(L, (lua_Integer)(g_idle_unload_ms.load() / 1000));\n    else lua_pushnil(L);")
+patch("    else if (strcmp(key, \"log_dir\") == 0)    g_log_dir = luaL_checkstring(L, 3);  // RIME 用户目录",
+      "    else if (strcmp(key, \"log_dir\") == 0)    g_log_dir = luaL_checkstring(L, 3);  // RIME 用户目录\n"
+      "    else if (strcmp(key, \"idle_unload_sec\") == 0) {   // 空闲多少秒后卸载模型，0 = 不卸载\n"
+      "        g_idle_unload_ms.store((long long)luaL_checkinteger(L, 3) * 1000);\n"
+      "        touch_use();\n"
+      "        ensure_idle_watchdog();\n"
+      "    }")
+
+
+# ---- 预解码：被丢弃的最新请求要记下来，等当前预解码结束后接着做 ----
+# 原版在 try_lock 失败时直接放弃，如果持锁的是另一个（已过期的）预解码，留下的就是旧上文的结果。
+patch("static std::atomic<bool> g_atexit_registered{false};",
+      r"""// ---- 预解码的“最新待办” ----
+static std::mutex                g_pending_mu;
+static std::vector<llama_token>  g_pending_ctx;
+static int                       g_pending_seq = 0;   // 0 = 没有待办
+
+static std::atomic<bool> g_atexit_registered{false};""")
+patch("static void prepare(const std::vector<llama_token> & ctx_ids, int seq) {",
+      "static void prepare_impl(const std::vector<llama_token> & ctx_ids, int seq) {")
+patch("""    if (!lock.owns_lock()) {
+        log_msg("prepare: SKIP score in progress (seq=%d ctx_tok=%d)",
+                seq, (int)ctx_ids.size());
+        return;
+    }""",
+      """    if (!lock.owns_lock()) {
+        // 有人持锁（打分，或另一个预解码）：不丢掉，记成“最新待办”，由持锁的预解码结束后接着做
+        std::lock_guard<std::mutex> pl(g_pending_mu);
+        g_pending_ctx = ctx_ids;
+        g_pending_seq = seq;
+        return;
+    }""")
+patch("static int lua_prepare(lua_State * L) {\n    touch_use();\n",
+      r"""// 执行预解码；执行期间如果有更新的请求被挡在外面，就接着做最新的那一个（过期的跳过）。
+// 再次被挡住（持锁的是打分）就停下，待办留给下一次 prepare 调用。
+static void prepare(const std::vector<llama_token> & ctx_ids, int seq) {
+    prepare_impl(ctx_ids, seq);
+    for (;;) {
+        std::vector<llama_token> c;
+        int sq = 0;
+        {
+            std::lock_guard<std::mutex> pl(g_pending_mu);
+            if (g_pending_seq == 0) break;
+            c = std::move(g_pending_ctx);
+            sq = g_pending_seq;
+            g_pending_seq = 0;
+        }
+        if (sq != g_prep_seq.load()) continue;     // 已被更新的请求取代
+        prepare_impl(c, sq);
+        std::lock_guard<std::mutex> pl(g_pending_mu);
+        if (g_pending_seq != 0) break;               // 又被挡住了：留给下一次
+    }
+}
+
+static int lua_prepare(lua_State * L) {
+    touch_use();
+""")
+
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")
