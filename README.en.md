@@ -91,7 +91,7 @@ The AI-rerank binary and model are installed separately with `llm-mac/install_ll
 
 ### Windows (Weasel)
 
-`windows/` contains `install.ps1` (backs up, then installs, keeping your own `default.custom.yaml` and user data), `check_deployed.ps1` (verifies after deployment that the official spelling rules survived the patches), and a `rime_ice.custom.yaml` without the features that could clash with AI reranking. **These scripts have not been fully verified on a real Windows machine; use `-DryRun` first.** On Windows the AI reranker is the upstream plugin built from source with some local patches that are not in this repo; it is not the macOS port in `llm-mac/`.
+`windows/` contains `install.ps1` (backs up, then installs, keeping your own `default.custom.yaml` and user data), `check_deployed.ps1` (verifies after deployment that the official spelling rules survived the patches), and a `rime_ice.custom.yaml` without the features that could clash with AI reranking. The scripts have been run on a real Windows machine and fixed (robocopy hanging on locked files, an invisible `-DryRun` listing, overwriting your own `weasel.yaml` style), but coverage is still limited; use `-DryRun` first. **After installing, click "Redeploy" in the tray icon**: `WeaselDeployer.exe /deploy` on a command line does not actually compile the schemas. The script does not copy `weasel.yaml`, so your own Weasel style is kept; put style overrides in `weasel.custom.yaml`. On Windows the AI reranker is the upstream plugin built from source with some local patches that are not in this repo; it is not the macOS port in `llm-mac/`.
 
 ## Syncing with upstream
 

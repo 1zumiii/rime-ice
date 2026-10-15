@@ -93,7 +93,7 @@ AI 重排的二进制和模型另外安装：`llm-mac/install_llm.sh`，步骤�
 
 ### Windows（小狼毫）
 
-`windows/` 下有一套适配：`install.ps1`（先备份再安装，保留你的 `default.custom.yaml` 和用户数据）、`check_deployed.ps1`（部署后检查官方拼写规则有没有被补丁覆盖）、以及去掉了和 AI 重排可能冲突的功能的 `rime_ice.custom.yaml`。**这套脚本没有在真实 Windows 机器上完整验证过，请先用 `-DryRun` 预览。** AI 重排在 Windows 上用的是自行从源码编译的上游插件（带一些本地补丁，补丁不在本仓库里），不是这里的 macOS 移植。
+`windows/` 下有一套适配：`install.ps1`（先备份再安装，保留你的 `default.custom.yaml` 和用户数据）、`check_deployed.ps1`（部署后检查官方拼写规则有没有被补丁覆盖）、以及去掉了和 AI 重排可能冲突的功能的 `rime_ice.custom.yaml`。脚本在真实 Windows 上跑过并修过几个问题（`robocopy` 遇到被占用的文件会卡死、预览看不到文件列表、会覆盖自己的 `weasel.yaml` 样式），但覆盖面仍有限，请先用 `-DryRun` 预览。**安装后要点托盘图标的「重新部署」**，命令行的 `WeaselDeployer.exe /deploy` 不会真正编译方案。脚本不会拷贝 `weasel.yaml`，所以你自己的小狼毫样式会保留，样式覆盖请写在 `weasel.custom.yaml`。 AI 重排在 Windows 上用的是自行从源码编译的上游插件（带一些本地补丁，补丁不在本仓库里），不是这里的 macOS 移植。
 
 ## 同步上游更新
 
