@@ -50,8 +50,10 @@ BAK="$DEST.bak-before-ours"
 "$ADB" shell "test -d $BAK || cp -r $DEST $BAK" && echo "备份：$BAK"
 
 "$ADB" push "$STAGE"/. "$DEST"/ | tail -1
-# Trime 主题补丁（键帽高度）：只在 llm-android/ 下，上面的同步会排除它，单独推送
-"$ADB" push "$REPO/llm-android/trime/trime.custom.yaml" "$DEST/trime.custom.yaml" | tail -1
+# Trime 主题补丁（键盘布局/高度）：放在 llm-android/trime/ 下，上面的同步会排除它们，逐个单独推送
+for tp in "$REPO"/llm-android/trime/*.custom.yaml; do
+  [[ -f "$tp" ]] && "$ADB" push "$tp" "$DEST/$(basename "$tp")" | tail -1
+done
 
 if [[ $WITH_GRAM -eq 1 ]]; then
   [[ -f "$GRAM" ]] || { echo "找不到语法模型 $GRAM"; exit 1; }

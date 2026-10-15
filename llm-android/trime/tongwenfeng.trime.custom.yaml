@@ -1,0 +1,426 @@
+# 同文风主题（tongwenfeng）的布局补丁：改成 GBoard 的习惯布局。由 gen_tongwenfeng_patch.py 生成，不要手改。
+# 文件名必须是 <主题 id>.custom.yaml（主题 id = tongwenfeng.trime），Trime/librime 按这个名字自动套用。
+patch:
+  style/keyboard_height: 225
+  style/keyboard_height_land: 180
+  style/enter_labels/default: ic@keyboard_return
+  preset_keys/Shift_L/label: ic@arrow_up_bold_outline
+  preset_keys/BackSpace/label: ic@backspace_outline
+  preset_keys/BackSpace2/label: ic@backspace_outline
+  preset_keys/Keyboard_number/label: '?123'
+  preset_keys/space/label: English
+  preset_keys/Keyboard_emoji: {label: ic@emoticon_happy_outline, functional: false, send: Eisu_toggle, select: bqrw1}
+  preset_keys/Keyboard_numpad: {label: '1234', functional: false, send: Eisu_toggle, select: numpad}
+  preset_keys/Keyboard_fh: {label: =\<, functional: true, send: Eisu_toggle, select: fh1}
+  preset_keys/Keyboard_bqsy1/select: fh1
+  preset_keys/Keyboard_bqsy2/select: fhe
+  preset_keys/Keyboard_bqfh/select: fh1
+  preset_keys/Keyboard_bqrw/select: fh1
+  preset_keys/Keyboard_fhp1: {label: 上页, functional: false, send: Eisu_toggle, select: fh1, key_text_size: '14'}
+  preset_keys/Keyboard_fhn1: {label: 下页, functional: false, send: Eisu_toggle, select: fh1, key_text_size: '14'}
+  preset_keys/Keyboard_fhp2: {label: 上页, functional: false, send: Eisu_toggle, select: fh2, key_text_size: '14'}
+  preset_keys/Keyboard_fhn2: {label: 下页, functional: false, send: Eisu_toggle, select: fh2, key_text_size: '14'}
+  preset_keys/Keyboard_fhp3: {label: 上页, functional: false, send: Eisu_toggle, select: fh3, key_text_size: '14'}
+  preset_keys/Keyboard_fhn3: {label: 下页, functional: false, send: Eisu_toggle, select: fh3, key_text_size: '14'}
+  preset_keys/Keyboard_fhp4: {label: 上页, functional: false, send: Eisu_toggle, select: fh4, key_text_size: '14'}
+  preset_keys/Keyboard_fhn4: {label: 下页, functional: false, send: Eisu_toggle, select: fh4, key_text_size: '14'}
+  preset_keyboards/bqrw1/keys/@26/click: ☺️
+  preset_keyboards/default/keys:
+  - {click: q, long_click: '1', key_back_color: bh1, key_text_color: th1}
+  - {click: w, long_click: '2', key_back_color: bh1, key_text_color: th1}
+  - {click: e, long_click: '3', key_back_color: bh1, key_text_color: th1}
+  - {click: r, long_click: '4', key_back_color: bh1, key_text_color: th1}
+  - {click: t, long_click: '5', key_back_color: bh1, key_text_color: th1}
+  - {click: y, long_click: '6', key_back_color: bh1, key_text_color: th1}
+  - {click: u, long_click: '7', key_back_color: bh1, key_text_color: th1}
+  - {click: i, long_click: '8', key_back_color: bh1, key_text_color: th1}
+  - {click: o, long_click: '9', key_back_color: bh1, key_text_color: th1}
+  - {click: p, long_click: '0', key_back_color: bh1, key_text_color: th1}
+  - {width: 5, key_back_color: bh2, key_text_color: th2}
+  - {click: a, long_click: select_all, key_back_color: bh2, key_text_color: th2}
+  - click: s
+    long_click: '@'
+    key_back_color: bh2
+    key_text_color: th2
+  - click: d
+    long_click: '#'
+    key_back_color: bh2
+    key_text_color: th2
+  - {click: f, long_click: $, key_back_color: bh2, key_text_color: th2}
+  - click: g
+    long_click: '%'
+    swipe_down: date_time
+    key_back_color: bh2
+    key_text_color: th2
+  - click: h
+    long_click: '!'
+    swipe_down: +
+    key_back_color: bh2
+    key_text_color: th2
+  - click: j
+    long_click: '&'
+    swipe_down: '-'
+    key_back_color: bh2
+    key_text_color: th2
+  - click: k
+    long_click: '*'
+    swipe_down: _
+    key_back_color: bh2
+    key_text_color: th2
+  - {click: l, long_click: '(){Left}', swipe_down: '=', key_back_color: bh2, key_text_color: th2}
+  - {width: 5, key_back_color: bh2, key_text_color: th2}
+  - {click: Shift_L, long_click: Shift_L, double_click: Shift_L3, composing: delimiter, width: 15, hilited_key_back_color: benter, key_back_color: bbs, key_text_color: tbs}
+  - click: z
+    long_click: '`'
+    swipe_down: '[]{Left}'
+    key_back_color: bh3
+    key_text_color: th3
+  - click: x
+    long_click: cut
+    swipe_down: '{}{Left}'
+    key_back_color: bh3
+    key_text_color: th3
+  - click: c
+    long_click: copy
+    swipe_down: ' '
+    key_back_color: bh3
+    key_text_color: th3
+  - {click: v, long_click: paste_clip, swipe_down: paste, key_back_color: bh3, key_text_color: th3}
+  - {click: b, long_click: ;, swipe_down: \, key_back_color: bh3, key_text_color: th3}
+  - click: n
+    long_click: ':'
+    key_back_color: bh3
+    key_text_color: th3
+  - click: m
+    long_click: '?'
+    swipe_down: '|'
+    key_back_color: bh3
+    key_text_color: th3
+  - {click: BackSpace2, width: 15, key_back_color: bbs, key_text_color: tbs}
+  - click: Keyboard_number
+    long_click: '{hide_key_symbol}{hide_key_hint}'
+    width: 15
+    key_back_color: bgn
+    key_text_color: tgn
+  - click: ','
+    label: ，
+    long_click: <>{Left}
+    width: 10
+    key_back_color: bh4
+    key_text_color: th4
+  - {click: Keyboard_emoji, long_click: liquid_keyboard_switch, width: 10, key_back_color: bh4, key_text_color: th4}
+  - {click: space, label: 拼音, long_click: Mode_switch, swipe_left: Left, swipe_right: Right, swipe_up: Schema_switchcn, width: 40, key_text_size: '16', key_back_color: bkg, key_text_color: tkg}
+  - {click: ., label: 。, long_click: clipboard_window, width: 10, key_back_color: bh4, key_text_color: th4}
+  - click: Return
+    label_symbol: wiki
+    popup: [TrimeWiki, Settings]
+    composing: Return1
+    swipe_up: Escape
+    width: 15
+    key_back_color: benter
+    key_text_color: tenter
+  preset_keyboards/number:
+    author: GBoard 风格
+    name: 数字符号页
+    width: 10
+    ascii_mode: 1
+    keys:
+    - {click: '1'}
+    - {click: '2'}
+    - {click: '3'}
+    - {click: '4'}
+    - {click: '5'}
+    - {click: '6'}
+    - {click: '7'}
+    - {click: '8'}
+    - {click: '9'}
+    - {click: '0'}
+    - click: '@'
+    - click: '#'
+    - {click: $}
+    - {click: _}
+    - click: '&'
+    - click: '-'
+    - {click: +}
+    - {click: (}
+    - {click: )}
+    - {click: /}
+    - {click: Keyboard_fh, width: 15, key_back_color: bgn, key_text_color: tgn}
+    - {click: 、}
+    - {click: “}
+    - {click: ”}
+    - click: ':'
+    - {click: ;}
+    - click: '!'
+    - click: '?'
+    - {click: BackSpace2, width: 15, key_back_color: bbs, key_text_color: tbs}
+    - {click: Keyboard_default, width: 15, key_back_color: bgn, key_text_color: tgn}
+    - click: ','
+      long_click: <
+      width: 10
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: Keyboard_numpad, width: 10, key_back_color: bgn, key_text_color: tgn}
+    - {click: space, long_click: Mode_switch, width: 40, key_text_size: '16', key_back_color: bkg, key_text_color: tkg}
+    - click: .
+      long_click: '>'
+      width: 10
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: Return, long_click: Menu, width: 15, key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/numpad:
+    author: 暖暖
+    name: 数字+
+    width: 16.6
+    ascii_mode: 1
+    keys:
+    - click: '{}{Left}'
+      long_click: 【】{Left}
+      key_back_color: bgn
+      key_text_color: tgn
+    - click: +
+      long_click: '#'
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: 1}
+    - {click: 2}
+    - {click: 3}
+    - {click: space1, key_back_color: bgn, key_text_color: tgn}
+    - click: _
+      long_click: '[]{Left}'
+      key_back_color: bgn
+      key_text_color: tgn
+    - click: '-'
+      long_click: '%'
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: 4}
+    - {click: 5}
+    - {click: 6}
+    - {label: EN, click: Keyboard_defaulten, key_back_color: bgn, key_text_color: tgn}
+    - click: (){Left}
+      long_click: '@'
+      key_back_color: bgn
+      key_text_color: tgn
+    - click: '*'
+      long_click: ±
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: 7, long_click: select_all}
+    - {click: 8, long_click: copy}
+    - {click: 9, long_click: paste_clip, swipe_down: paste}
+    - {click: BackSpace, key_back_color: bbs, key_text_color: tbs}
+    - click: Keyboard_default
+      long_click: ':'
+      key_back_color: bgn
+      key_text_color: tgn
+    - {click: /, long_click: \, key_back_color: bgn, key_text_color: tgn}
+    - {click: ., long_click: Keyboard_bqrw, key_back_color: bgn, key_text_color: tgn}
+    - {click: 0, long_click: cut}
+    - {click: '=', long_click: ≠, key_back_color: bgn, key_text_color: tgn}
+    - {click: Return, long_click: Menu, key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/fh1:
+    author: GBoard 风格（符号取自 风花絮 的原键盘）
+    name: 符号 1/4
+    ascii_mode: 0
+    width: 14.28
+    height: 30
+    keys:
+    - {click: ，}
+    - {click: 。}
+    - {click: ？}
+    - {click: ！}
+    - {click: ：}
+    - {click: 、}
+    - {click: ……}
+    - {click: ；}
+    - {click: +}
+    - click: '-'
+    - {click: '='}
+    - {click: ·}
+    - {click: ｀}
+    - click: '#'
+    - {click: ￥}
+    - click: '%'
+    - {click: ˉ}
+    - {click: ——}
+    - {click: '“”{Left}'}
+    - {click: '‘’{Left}'}
+    - {click: 'ˆˇ{Left}'}
+    - {click: '（）{Left}'}
+    - {click: '〈〉{Left}'}
+    - {click: '‹›{Left}'}
+    - {click: '｛｝{Left}'}
+    - {click: '『』{Left}'}
+    - {click: Keyboard_fhn2, width: 14.28, key_text_size: '14'}
+    - {label: 更多, click: Keyboard_symbols, width: 14.28, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: Keyboard_default, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 中文, click: Keyboard_bqsy1, width: 16.5, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 英文, click: Keyboard_bqsy2, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 表情, click: Keyboard_bqsy3, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 颜文, click: Keyboard_bqsy4, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: BackSpace, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/fh2:
+    author: GBoard 风格（符号取自 风花絮 的原键盘）
+    name: 符号 2/4
+    ascii_mode: 0
+    width: 14.28
+    height: 30
+    keys:
+    - {click: '〖〗{Left}'}
+    - {click: '［］{Left}'}
+    - {click: '《》{Left}'}
+    - {click: '〔〕{Left}'}
+    - click: '{}{Left}'
+    - {click: '「」{Left}'}
+    - {click: '【】{Left}'}
+    - {click: ～}
+    - click: '@{Return}'
+    - click: '*{Return}'
+    - click: '&{Return}'
+    - {click: ﹏}
+    - {click: ﹋}
+    - {click: ﹌}
+    - {click: ︴}
+    - {click: 々}
+    - {click: ﹤}
+    - {click: ｜}
+    - {click: ‖}
+    - {click: ‐}
+    - {click: ￣}
+    - {click: ¯}
+    - {click: ‰}
+    - {click: ‱}
+    - {click: ℉}
+    - {click: Keyboard_fhp1, width: 14.28, key_text_size: '14'}
+    - {click: Keyboard_fhn3, width: 14.28, key_text_size: '14'}
+    - {label: 更多, click: Keyboard_symbols, width: 14.28, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: Keyboard_default, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 中文, click: Keyboard_bqsy1, width: 16.5, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 英文, click: Keyboard_bqsy2, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 表情, click: Keyboard_bqsy3, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 颜文, click: Keyboard_bqsy4, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: BackSpace, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/fh3:
+    author: GBoard 风格（符号取自 风花絮 的原键盘）
+    name: 符号 3/4
+    ascii_mode: 0
+    width: 14.28
+    height: 30
+    keys:
+    - {click: €}
+    - {click: £}
+    - {click: ¢}
+    - {click: ¤}
+    - {click: ₩}
+    - {click: ―}
+    - {click: ﹨}
+    - {click: ˜}
+    - {click: ﹍}
+    - {click: ﹎}
+    - {click: 〜}
+    - {click: 〰}
+    - {click: °}
+    - {click: ℃}
+    - {click: 〝〞}
+    - {click: '﹙﹚{Left}'}
+    - {click: '﹛﹜{Left}'}
+    - {click: '﹤﹥{Left}'}
+    - {click: '〘〙{Left}'}
+    - {click: '︵︶{Left}'}
+    - {click: '︷︸{Left}'}
+    - {click: '︿﹀{Left}'}
+    - {click: '︽︾{Left}'}
+    - {click: '︹︺{Left}'}
+    - {click: '︻︼{Left}'}
+    - {click: Keyboard_fhp2, width: 14.28, key_text_size: '14'}
+    - {click: Keyboard_fhn4, width: 14.28, key_text_size: '14'}
+    - {label: 更多, click: Keyboard_symbols, width: 14.28, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: Keyboard_default, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 中文, click: Keyboard_bqsy1, width: 16.5, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 英文, click: Keyboard_bqsy2, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 表情, click: Keyboard_bqsy3, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 颜文, click: Keyboard_bqsy4, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: BackSpace, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/fh4:
+    author: GBoard 风格（符号取自 风花絮 的原键盘）
+    name: 符号 4/4
+    ascii_mode: 0
+    width: 14.28
+    height: 30
+    keys:
+    - {click: '﹃﹄{Left}'}
+    - {click: 〟}
+    - {click: 〃}
+    - {click: ﹐}
+    - {click: ﹒}
+    - {click: ﹑}
+    - {click: ﹖}
+    - {click: ﹗}
+    - {click: ﹘}
+    - {click: ﹔}
+    - {click: ﹕}
+    - {click: ﹪}
+    - {click: ﹢}
+    - {click: ﹣}
+    - {click: ﹦}
+    - {click: ﹫}
+    - {click: ﹠}
+    - {click: ﹩}
+    - {click: ﹡}
+    - {click: ﹟}
+    - &id001 {width: 14.28}
+    - *id001
+    - *id001
+    - *id001
+    - *id001
+    - {click: Keyboard_fhp3, width: 14.28, key_text_size: '14'}
+    - {width: 14.28}
+    - {label: 更多, click: Keyboard_symbols, width: 14.28, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: Keyboard_default, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 中文, click: Keyboard_bqsy1, width: 16.5, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 英文, click: Keyboard_bqsy2, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 表情, click: Keyboard_bqsy3, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 颜文, click: Keyboard_bqsy4, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: BackSpace, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+  preset_keyboards/fhe:
+    author: GBoard 风格（符号取自 风花絮 的原键盘）
+    name: 英文符号
+    ascii_mode: 0
+    width: 14.28
+    height: 30
+    keys:
+    - click: ','
+    - {click: .}
+    - click: '?'
+    - click: '!'
+    - click: ':'
+    - {click: /}
+    - click: '@'
+    - {click: ;}
+    - {click: …}
+    - click: '"'
+    - click: ''''
+    - {click: '~'}
+    - click: '*'
+    - click: '&'
+    - {click: ^}
+    - {click: $}
+    - {click: \}
+    - click: '|'
+    - click: '#'
+    - {click: '(){Left}'}
+    - {click: '<>{Left}'}
+    - click: '{}{Left}'
+    - click: '[]{Left}'
+    - click: '`'
+    - click: '%'
+    - {click: +}
+    - click: '-'
+    - {click: '='}
+    - {click: Keyboard_default, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 中文, click: Keyboard_bqsy1, width: 16.5, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
+    - {label: 英文, click: Keyboard_bqsy2, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 表情, click: Keyboard_bqsy3, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {label: 颜文, click: Keyboard_bqsy4, width: 16.5, key_text_size: '14', key_back_color: bgn, key_text_color: tgn}
+    - {click: BackSpace, width: 17, key_text_size: '14', key_back_color: benter, key_text_color: tenter}
