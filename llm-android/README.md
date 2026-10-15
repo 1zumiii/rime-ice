@@ -30,6 +30,30 @@
 - 绑大核比不绑核更慢。
 - **权重重排（`use_repack`）在手机上不值得**：延迟没有改善（P50 85 ms），私有内存却多约 500 MB。保持关闭。
 
+## 第一档配置在 Trime 上已部署并编译成功
+
+用 `llm-android/deploy_trime.sh` 把本仓库的配置推到手机（`adb push` 到 `/sdcard/Android/data/com.osfans.trime/files/rime`），再通过 Trime 自带的广播 `com.osfans.trime.action.DEPLOY` 触发部署，不需要在手机上点界面：
+
+```bash
+llm-android/deploy_trime.sh --with-gram        # 首次：配置 + 语法模型（约 380 MB）
+llm-android/deploy_trime.sh                    # 之后改了配置：只推配置
+```
+
+前提：Trime 已安装，并且走完首次启动引导，在第 1 步选「**使用应用专属存储空间**」。
+
+手机上编译（骁龙 8 Gen 2，约 12~20 秒）出来的结果与 Mac 一致：
+
+| 检查项 | 手机 | Mac |
+| --- | --- | --- |
+| `rime_ice.table.bin` 大小 | 60,656,260 字节 | 60,656,260 字节 |
+| 拼写规则 / 简拼规则 | 55 / 2 | 55 / 2 |
+| 过滤器、处理器顺序 | 一致 | |
+| librime 版本 | **1.17.0** | 1.16.0 |
+
+Trime 的 librime 1.17.0 比鼠须管的 1.16.0 新，所以 `translator/max_sentences`（长句候选数）可以在手机上启用。
+
+**尚未验证**：在手机上实际打字时这些 Lua 过滤器是否都正常加载（需要在 Trime 里用 `rime_ice` 方案打字，看最近使用优先、emoji 在第二页、模糊音、语法模型等是否生效）；AI 重排在手机上还没有接入（`rime_llm.so` 没有放进去，相关组件会安静地什么也不做）。
+
 ## 设计结论（待实现）
 
 - **每个按键的开销很小（约 6 ms），耗电发热的大头是上屏后的后台预解码**。手机上可考虑降低 `max_tokens`（10 → 6）缩短预解码。
