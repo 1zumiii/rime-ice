@@ -76,10 +76,26 @@ local function load_llm(env)
         end
     end
     local ok, cpp = pcall(require, "rime_llm")
-    if not ok or type(cpp) ~= "table" then return end
+    local err1 = (not ok) and tostring(cpp) or nil
+    if not ok or type(cpp) ~= "table" then
+        -- Android（Trime）：库在 APK 的原生库目录里，按文件名由系统加载器解析
+        local f, err2 = package.loadlib("librime_llm.so", "luaopen_rime_llm")
+        if f then
+            ok, cpp = pcall(f)
+            if not ok then err2 = tostring(cpp) end
+        end
+        if not (ok and type(cpp) == "table") then
+            if ud then
+                local fh = io.open(ud .. "/llm_load_error.txt", "w")
+                if fh then fh:write(tostring(err1), "\n", tostring(err2), "\n"); fh:close() end
+            end
+            return
+        end
+    end
     local sc = env.engine.schema.config
     local mp = sc:get_string("llm_rerank/model_path")
-    if mp and mp ~= "" then cpp.model_path = mp end   -- 未配置时用 C++ 默认 ~/Library/Rime/Qwen3.5-0.8B-Q4_K_M.gguf
+    if mp and mp ~= "" then cpp.model_path = mp
+    elseif ud then cpp.model_path = ud .. "/Qwen3.5-0.8B-Q4_K_M.gguf" end   -- 默认：用户目录下的模型（macOS 即 ~/Library/Rime）
     local mt = sc:get_int("llm_rerank/max_tokens")
     if mt then cpp.max_ctx = mt end
     local cores = sc:get_int("llm_rerank/cpu_cores")
