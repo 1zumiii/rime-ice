@@ -1,0 +1,3 @@
+  # ---- 手机（Trime）专属：追加到 default.custom.yaml 的 patch 末尾 ----
+  # 记住 AI 开关（手动启停）：不记的话，Trime 每次重启都会回到默认状态。
+  "switcher/save_options/@next": ai_rerank

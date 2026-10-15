@@ -1,4 +1,4 @@
-# rime-llm-rerank 的 Android 移植（实验，进行中）
+# rime-llm-rerank 的 Android 移植（Trime，已可日常使用）
 
 目标设备：ASUS Zenfone 10（骁龙 8 Gen 2，16 GB，Android 15）。目标前端：[Trime（同文输入法）](https://github.com/osfans/trime)。
 
@@ -52,15 +52,51 @@ llm-android/deploy_trime.sh                    # 之后改了配置：只推配�
 
 Trime 的 librime 1.17.0 比鼠须管的 1.16.0 新，所以 `translator/max_sentences`（长句候选数）可以在手机上启用。
 
-**尚未验证**：在手机上实际打字时这些 Lua 过滤器是否都正常加载（需要在 Trime 里用 `rime_ice` 方案打字，看最近使用优先、emoji 在第二页、模糊音、语法模型等是否生效）；AI 重排在手机上还没有接入（`rime_llm.so` 没有放进去，相关组件会安静地什么也不做）。
+## 已实现的方案：常驻推理进程 + 改版 Trime
 
-## 设计结论（待实现）
+Trime 的数据目录挂载为 `noexec`，Trime 也不可调试（`run-as` 被拒），所以 `rime_llm.so` 没法从外面放进去，必须进 APK。再加上稳定性方面的考虑，最后做成**推理在独立进程、Trime 里只放一个薄客户端**：
 
-- **每个按键的开销很小（约 6 ms），耗电发热的大头是上屏后的后台预解码**。手机上可考虑降低 `max_tokens`（10 → 6）缩短预解码。
-- 四字两阶段的第二阶段要现场解码，在手机上偏重，建议默认关闭。
-- 熄屏联动：前端在熄屏时调用 `setRimeOption("screen_off", true)`，Lua 通过 `option_update_notifier` 收到后临时缩短空闲超时（原来的 20 分钟超时保留作兜底）。需要给 Trime 加一个广播接收器。
-- 崩溃隔离：把推理放进同一应用里的独立进程服务，输入法进程通过本地套接字请求；服务崩溃/被杀只意味着「这次不重排」，由 Binder 死亡回调自动拉起。
-- 状态面板：读取 `ActivityManager.getHistoricalProcessExitReasons()`（Android 11+）显示进程每次退出的系统原因，加上服务心跳、加载/卸载原因、延迟分布、跳过次数、内存/温度/省电状态，以及应用是否被厂商电池优化限制。
+```
+Trime（改版 APK）                              rimellmd（shell 身份，adb / Shizuku 拉起）
+  Lua 脚本（和 Mac/PC 同一份）                    监督进程：看护工作进程，被杀/崩溃/无响应则退避重启，记录退出原因
+    └ librime_llm.so（客户端，140 KB）  ──socket──▶  工作进程：llama.cpp 引擎（与 Mac 同一份）+ 状态文件
+  工具栏 AI 徽标（状态/启停/Shizuku 启动）          127.0.0.1:17920，令牌认证
+```
+
+- **客户端**（`daemon/rime_llm_client.cpp`）对 Lua 暴露与 `rime_llm.so` 完全相同的接口，所以 `ai_rerank_*.lua` 基本不用改。所有 I/O 都有时限，连不上就返回「不可用」（候选保持原顺序，输入不被拖慢），指数退避重连。
+- **守护进程**（`daemon/rimellmd.cpp`）内嵌一个私有 Lua 状态直接调用 Mac 上测过的引擎，不重写推理。打分和轻量请求（心跳、touch、is_ready、prepare、配置）用两个 Lua 状态、两把锁，慢打分不会挡住它们。
+- **认证**：每次启动生成随机令牌，写进 Trime 的应用专属目录（其他应用读不到）；只监听 127.0.0.1。Trime 需要 `INTERNET` 权限（改版 APK 已加）。
+- **手动启停**：工具栏的 `● AI` 徽标，点一下切换方案开关 `ai_rerank`；关闭时守护进程立刻卸载模型并拒绝推理（只剩几 MB 待命），开启时立刻加载。不再有自动卸载。选择会被记住（`save_options`），**新装默认关闭**。长按看详情。
+- **状态面板**：守护进程每 5 秒（手动切换后 15 秒内 0.3 秒一次）写 `ai_status.json`，徽标读它：绿 = 在线，黄 = 加载/重启中，灰 = 已关闭/待机，红 = 离线。详情里有内存、打分延迟、跳过/错误次数、累计重启次数和上次退出原因。
+- **自动拉起**：徽标变红（离线）时，点一下经 Shizuku 以 shell 身份启动守护进程（首次会弹 Shizuku 授权）；键盘弹出时发现离线，每分钟最多自动尝试一次。重启手机后需要先启动 Shizuku。
+- **熄屏联动**：Trime 在亮屏/熄屏时设置 Rime 选项 `screen_off`，Lua 转给守护进程（默认没有单独的熄屏时限，保留接口）。
+
+### 手机上的调优结论（实测，Zenfone 10 / 骁龙 8 Gen 2，空闲时、每次换一组新候选）
+
+- **该模型有按顺序处理的循环层**，打分约 100 ms 的下限与线程数基本无关（1/2/3 线程都是约 133 ms）。**4 线程会因预解码和打分同时忙等而偶发数秒卡顿**，2~3 线程没有，所以默认 2 线程。
+- 候选数是最有效的旋钮：5 个候选 p50≈118 ms，3 个≈78 ms，2 个≈61 ms。手机上用 3 个。
+- 四字词的第二阶段要现场解码，每次 100~500 ms，**手机上关闭**（Mac/PC 不受影响）。
+- 引擎默认按 128 上下文 / 12 并发序列预留，手机上收紧到 96 / 6：堆内存 374→234 MB，延迟不变。RSS 里另有约 512 MB 是模型文件映射页（干净页，可被内核随时回收）。
+- 上文 token 10→6，缩短上屏后的后台预解码。
+
+这些手机专属设置不改仓库里的 Mac/PC 配置，而是放在 `trime/*.overlay.yaml`，部署时追加到暂存的 `*.custom.yaml`（`deploy_trime.sh`）。
+
+### 文件
+
+| 路径 | 作用 |
+| --- | --- |
+| `daemon/rimellmd.cpp` | 守护进程（监督 + 工作） |
+| `daemon/rime_llm_client.cpp` | Trime 里的客户端库（`librime_llm.so`） |
+| `daemon/proto.h` | 线路协议（带总时限的帧读写） |
+| `daemon/rimellmctl.sh` | 电脑端 `deploy / start / stop / restart / status / log` |
+| `daemon/test_daemon.py` | 端到端测试：认证、非法输入、正确性、并发；`--chaos` 再做 `kill -9` 和 `SIGSTOP` 恢复测试 |
+| `daemon/bench_daemon.py` | 真实打分延迟基准（每次换新候选） |
+| `trime/patches/0001-ai-rerank-daemon.patch` | 对 Trime `ad5a14be` 的改动：`INTERNET`、亮灭屏接收器、AI 徽标、Shizuku 启动 |
+| `trime/build_apk.sh` | 从源码到签名 APK 的完整流程；`trime/sign_apk.sh` 只做对齐和签名 |
+| `trime/*.overlay.yaml`、`trime/trime.custom.yaml` | 手机专属配置叠加、键盘高度补丁 |
+| `deploy_trime.sh` | 推送配置并触发部署 |
+
+注意：覆盖安装改版 APK 之后，输入法服务要等键盘弹出才会起来，**部署广播只有服务在运行时才会被接收**，所以装完要先点开一个输入框再部署。换签名密钥必须先卸载原来的 Trime（会清空它的数据目录，先备份用户词库）。
 
 ## 构建与测试
 

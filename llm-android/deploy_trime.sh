@@ -29,6 +29,19 @@ rsync -a --exclude='.git/' --exclude='.github/' --exclude='.gitignore' --exclude
   --exclude='build/' --exclude='*.userdb/' --exclude='*.gram' --exclude='*.gguf' --exclude='luac.out' \
   --exclude='recent_words.tsv' \
   "$REPO"/ "$STAGE"/
+# 手机专属的补丁：trime/<名字>.overlay.yaml 追加到暂存区里的 <名字>.custom.yaml 末尾（仓库里的文件不改）
+for ov in "$REPO"/llm-android/trime/*.overlay.yaml; do
+  [[ -f "$ov" ]] || continue
+  base="$(basename "$ov" .overlay.yaml)"; tgt="$STAGE/$base.custom.yaml"
+  [[ -f "$tgt" ]] || { echo "跳过 $ov：没有对应的 $base.custom.yaml"; continue; }
+  [[ -n "$(tail -c1 "$tgt")" ]] && echo >> "$tgt"
+  cat "$ov" >> "$tgt"
+done
+# 新装默认关闭 AI（手机上手动启停）：改暂存文件里开关的 reset 默认值，并确认确实改到了
+if [[ -f "$STAGE/rime_ice.custom.yaml" ]]; then
+  sed -i '' 's/name: ai_rerank, reset: 1,/name: ai_rerank, reset: 0,/' "$STAGE/rime_ice.custom.yaml"
+  grep -q 'name: ai_rerank, reset: 0,' "$STAGE/rime_ice.custom.yaml" || { echo "错误：没能把 ai_rerank 的默认值改成关闭（rime_ice.custom.yaml 里的写法变了？）"; exit 1; }
+fi
 echo "将推送 $(find "$STAGE" -type f | wc -l | tr -d ' ') 个文件，$(du -sh "$STAGE" | cut -f1) → $DEST"
 [[ $DRY -eq 1 ]] && { find "$STAGE" -maxdepth 1 | sed "s#$STAGE/#  #" | sort | head -40; exit 0; }
 

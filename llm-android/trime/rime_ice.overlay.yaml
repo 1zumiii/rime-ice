@@ -1,0 +1,12 @@
+  # ---- 手机（Trime）专属：部署时追加到 rime_ice.custom.yaml 的 patch 末尾 ----
+  # 四字词的第二阶段要在输入线程上现场解码上文，手机 CPU 上每次约 100~200 ms（偶发数秒），打字时能明显感觉到卡。
+  # Mac（Metal）和 PC 上这一步只要几毫秒，所以只在手机上关闭。
+  llm_rerank/stage2: false
+  # 轻量档：手机 CPU 上实测（空闲时，新候选打分）：5 个候选 p50≈118 ms / 最大 217 ms；3 个候选 p50≈78 ms / 最大 124 ms。
+  # 上文 token 10→6 缩短上屏后的后台预解码（耗电发热的大头）。
+  llm_rerank/max_candidates: 3
+  llm_rerank/max_tokens: 6
+  # 手动启停（点工具栏的 AI 徽标）：不自动卸载，开着就一直在线；关闭时模型立刻卸载、推理进程只剩待命。
+  llm_rerank/idle_unload_minutes: 0
+  # 新装默认关闭 AI：手机上要手动开（点工具栏的 AI 徽标）。开关的 reset 默认值在 deploy_trime.sh 里改（Rime 的补丁键按字母序处理，
+  # 这里没法可靠地引用刚追加的开关）；用户的选择由 default.overlay.yaml 里的 save_options 记住。

@@ -1,0 +1,605 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 03fd624d..6e832e34 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -130,6 +130,8 @@ ksp {
+ dependencies {
+     ksp(project(":codegen"))
+     implementation(libs.kotlinx.coroutines)
++    implementation(libs.shizuku.api)
++    implementation(libs.shizuku.provider)
+     implementation(libs.kotlinx.serialization.json)
+     implementation(libs.androidx.activity)
+     implementation(libs.androidx.appcompat)
+diff --git a/app/proguard-rules.pro b/app/proguard-rules.pro
+index 3fe3fade..4f89cdc4 100644
+--- a/app/proguard-rules.pro
++++ b/app/proguard-rules.pro
+@@ -10,6 +10,7 @@
+ 
+ # Keep JNI interface
+ -keep class com.osfans.trime.core.* { *; }
++-keep class rikka.shizuku.** { *; }
+ 
+ # remove kotlin null checks
+ -assumenosideeffects class kotlin.jvm.internal.Intrinsics {
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 3a16667a..230b3e88 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -8,8 +8,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ <manifest xmlns:tools="http://schemas.android.com/tools"
+     xmlns:android="http://schemas.android.com/apk/res/android">
++    <!-- Shizuku 的库要求 API 23，Trime 的 minSdk 是 21；Shizuku 本身只在 6.0 以上的系统上有意义，旧系统上这条功能不会生效 -->
++    <uses-sdk tools:overrideLibrary="rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+     <uses-permission android:name="android.permission.VIBRATE" />
++    <!-- 与本机的 AI 重排守护进程（rimellmd）通信：只连 127.0.0.1 -->
++    <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+ 
+     <application
+@@ -21,6 +25,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
+         android:theme="@style/Theme.TrimeAppTheme"
+         android:hasFragileUserData="true"
+         tools:targetApi="29">
++        <!-- Shizuku：让 Trime 能在手机上直接拉起 AI 重排守护进程（不依赖电脑），首次使用会弹出 Shizuku 的授权请求 -->
++        <provider
++            android:name="rikka.shizuku.ShizukuProvider"
++            android:authorities="${applicationId}.shizuku"
++            android:enabled="true"
++            android:exported="true"
++            android:multiprocess="false"
++            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
++
+ 
+         <service
+             android:name=".ime.core.TrimeInputMethodService"
+diff --git a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt b/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
+index 0867126c..77d6c69d 100644
+--- a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
++++ b/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
+@@ -28,6 +28,7 @@ import com.osfans.trime.data.db.ClipboardHelper
+ import com.osfans.trime.data.prefs.AppPrefs
+ import com.osfans.trime.data.theme.Theme
+ import com.osfans.trime.data.theme.ThemeScope
++import com.osfans.trime.ime.bar.ui.AiStatusButtonAction
+ import com.osfans.trime.ime.bar.ui.AlwaysUi
+ import com.osfans.trime.ime.bar.ui.CandidateUi
+ import com.osfans.trime.ime.bar.ui.TabUi
+@@ -132,7 +133,10 @@ class InputBarDelegate(override val di: DI) :
+ 
+     private val alwaysUi: AlwaysUi by lazy {
+         AlwaysUi(context, scope) { action ->
+-            if (action.isNotEmpty()) {
++            if (action == AiStatusButtonAction.TOGGLE) {
++                // AI 重排手动启停：切方案开关 ai_rerank，Lua 侧会把它同步给常驻推理进程
++                service.postRimeJob { setRuntimeOption("ai_rerank", !getRuntimeOption("ai_rerank")) }
++            } else if (action.isNotEmpty()) {
+                 commonKeyboardActionListener.listener.onAction(theme.resolveAction(action))
+             } else {
+                 windowManager.attachWindow(SwitchOptionWindow(di))
+diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt
+new file mode 100644
+index 00000000..8ddecc54
+--- /dev/null
++++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt
+@@ -0,0 +1,132 @@
++/*
++ * SPDX-FileCopyrightText: 2026 1zumiii
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++package com.osfans.trime.ime.bar.ui
++
++import android.content.Context
++import android.content.pm.PackageManager
++import android.os.Handler
++import android.os.Looper
++import com.osfans.trime.data.base.DataManager
++import rikka.shizuku.Shizuku
++import java.io.File
++
++/**
++ * 通过 Shizuku 在手机上直接拉起 AI 重排守护进程 rimellmd（不依赖电脑）。
++ * 二进制随 APK 打包为 librimellmd.so；这里以 shell 身份把它复制到 /data/local/tmp/rimellm/ 再启动。
++ * 模型默认复用 Trime 用户目录里的 Qwen3.5-0.8B-Q4_K_M.gguf（第一次启动时复制一份到 /data/local/tmp/rimellm/model.gguf）。
++ */
++object AiDaemonLauncher {
++    enum class Availability { SHIZUKU_NOT_RUNNING, NEEDS_PERMISSION, READY }
++
++    sealed class Result {
++        data object Started : Result()
++        data object AlreadyRunning : Result()
++        data class Failed(val reason: String) : Result()
++    }
++
++    private const val REQUEST_CODE = 7301
++    private const val MODEL_NAME = "Qwen3.5-0.8B-Q4_K_M.gguf"
++    private val main = Handler(Looper.getMainLooper())
++
++    @Volatile
++    var lastAttemptMs = 0L
++        private set
++
++    @Volatile
++    var lastResult: String = "尚未启动过"
++        private set
++
++    fun availability(): Availability =
++        try {
++            when {
++                !Shizuku.pingBinder() -> Availability.SHIZUKU_NOT_RUNNING
++                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> Availability.READY
++                else -> Availability.NEEDS_PERMISSION
++            }
++        } catch (e: Throwable) {
++            Availability.SHIZUKU_NOT_RUNNING
++        }
++
++    /** 弹出 Shizuku 的授权请求；授权后回调 [onGranted]。 */
++    fun requestPermission(onGranted: () -> Unit) {
++        val listener =
++            object : Shizuku.OnRequestPermissionResultListener {
++                override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
++                    if (requestCode != REQUEST_CODE) return
++                    Shizuku.removeRequestPermissionResultListener(this)
++                    if (grantResult == PackageManager.PERMISSION_GRANTED) main.post(onGranted)
++                }
++            }
++        Shizuku.addRequestPermissionResultListener(listener)
++        try {
++            Shizuku.requestPermission(REQUEST_CODE)
++        } catch (e: Throwable) {
++            Shizuku.removeRequestPermissionResultListener(listener)
++        }
++    }
++
++    private fun shellScript(libDir: String, rimeDir: String): String =
++        """
++        D=/data/local/tmp/rimellm
++        mkdir -p ${'$'}D || exit 11
++        if pidof rimellmd >/dev/null 2>&1; then echo RUNNING; exit 0; fi
++        cp "$libDir/librimellmd.so" ${'$'}D/rimellmd.new && chmod 755 ${'$'}D/rimellmd.new && mv -f ${'$'}D/rimellmd.new ${'$'}D/rimellmd || { echo COPY_FAIL; exit 12; }
++        if [ ! -f ${'$'}D/model.gguf ]; then
++          [ -f "$rimeDir/$MODEL_NAME" ] || { echo NO_MODEL; exit 13; }
++          cp "$rimeDir/$MODEL_NAME" ${'$'}D/model.gguf || { echo MODEL_COPY_FAIL; exit 14; }
++        fi
++        cd ${'$'}D
++        ( setsid nohup ./rimellmd --supervise --model ${'$'}D/model.gguf --rime-dir "$rimeDir" --log-dir ${'$'}D \
++            --port 17920 --threads 2 --idle-sec 0 --n-ctx 96 --n-seq-max 6 >> ${'$'}D/daemon.log 2>&1 < /dev/null & ) > /dev/null 2>&1 < /dev/null
++        sleep 1
++        pidof rimellmd >/dev/null 2>&1 && echo STARTED || { echo START_FAIL; exit 15; }
++        """.trimIndent()
++
++    /** 在后台线程里经 Shizuku 以 shell 身份启动守护进程，结果回到主线程。 */
++    fun start(context: Context, onResult: (Result) -> Unit) {
++        lastAttemptMs = System.currentTimeMillis()
++        Thread {
++            val result =
++                try {
++                    val libDir = context.applicationInfo.nativeLibraryDir
++                    val rimeDir = DataManager.userDataDir.absolutePath
++                    if (!File(libDir, "librimellmd.so").exists()) {
++                        Result.Failed("APK 里没有 librimellmd.so")
++                    } else {
++                        val method =
++                            Shizuku::class.java.getDeclaredMethod(
++                                "newProcess",
++                                Array<String>::class.java,
++                                Array<String>::class.java,
++                                String::class.java,
++                            )
++                        method.isAccessible = true
++                        val proc =
++                            method.invoke(null, arrayOf("sh", "-c", shellScript(libDir, rimeDir)), null, null) as Process
++                        val out = proc.inputStream.bufferedReader().readText().trim()
++                        val err = proc.errorStream.bufferedReader().readText().trim()
++                        val code = proc.waitFor()
++                        when {
++                            out.contains("RUNNING") -> Result.AlreadyRunning
++                            out.contains("STARTED") -> Result.Started
++                            out.contains("NO_MODEL") ->
++                                Result.Failed("找不到模型：把 $MODEL_NAME 放进 Trime 的用户目录")
++                            else -> Result.Failed("退出码 $code ${(out + " " + err).trim().take(120)}")
++                        }
++                    }
++                } catch (e: Throwable) {
++                    Result.Failed("${e.javaClass.simpleName}: ${e.message?.take(100)}")
++                }
++            lastResult =
++                when (result) {
++                    Result.Started -> "已启动"
++                    Result.AlreadyRunning -> "已在运行"
++                    is Result.Failed -> "失败：${result.reason}"
++                }
++            main.post { onResult(result) }
++        }.start()
++    }
++}
+diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
+new file mode 100644
+index 00000000..327da0c8
+--- /dev/null
++++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
+@@ -0,0 +1,239 @@
++/*
++ * SPDX-FileCopyrightText: 2026 1zumiii
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++package com.osfans.trime.ime.bar.ui
++
++import android.content.Context
++import android.graphics.Color
++import android.graphics.Typeface
++import android.os.Handler
++import android.os.Looper
++import android.os.SystemClock
++import android.view.Gravity
++import android.view.HapticFeedbackConstants
++import android.widget.TextView
++import android.widget.Toast
++import com.osfans.trime.data.base.DataManager
++import org.json.JSONObject
++
++object AiStatusButtonAction {
++    const val TOGGLE = "ai_toggle"
++}
++
++/**
++ * AI 重排守护进程（rimellmd）的状态指示和手动启停。读用户目录里的 ai_status.json：
++ * 绿 = 模型在线；黄 = 加载中/重启中；灰 = 已关闭或空闲已卸载；红 = 守护进程没有响应。
++ * 点一下：开/关（立刻有触感和动画，开启时黄色闪烁直到模型加载完成）；长按：看详情。
++ * 从没部署过守护进程（文件不存在）时不显示。
++ */
++class AiStatusButton(context: Context, private val onToggle: () -> Unit) : TextView(context) {
++    private val handler = Handler(Looper.getMainLooper())
++    private var detail = ""
++
++    // 点击后等待守护进程真正切换完成：目标状态 + 截止时间
++    private var pendingTarget: Boolean? = null
++    private var pendingUntil = 0L
++    private var blinkOn = false
++
++    // 守护进程离线时，点一下 = 经 Shizuku 启动它；启动期间显示"启动中"
++    private var offlineNow = false
++    private var startingUntil = 0L
++
++    private val tick = object : Runnable {
++        override fun run() {
++            refresh()
++            handler.postDelayed(this, if (pendingTarget != null) FAST_MS else POLL_MS)
++        }
++    }
++
++    init {
++        text = "● AI"
++        textSize = 14f
++        typeface = Typeface.DEFAULT_BOLD
++        gravity = Gravity.CENTER
++        setPadding(dpToPx(6), 0, dpToPx(6), 0)
++        visibility = GONE
++        setOnClickListener {
++            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
++            if (offlineNow) {
++                startDaemon(userInitiated = true)
++                return@setOnClickListener
++            }
++            // 目标 = 当前显示状态的反面（灰色的「已关闭」之外都算开着）
++            val target = text.toString() == "○ AI"
++            pendingTarget = target
++            pendingUntil = SystemClock.uptimeMillis() + PENDING_MS
++            pop()
++            if (target) show(YELLOW, "AI 重排：开启中，正在加载模型…", "◐ AI") else show(GRAY, "AI 重排：关闭中…", "○ AI")
++            onToggle()
++            handler.removeCallbacks(tick)
++            handler.postDelayed(tick, FAST_MS)
++        }
++        setOnLongClickListener {
++            refresh()
++            Toast.makeText(context, detail, Toast.LENGTH_LONG).show()
++            true
++        }
++    }
++
++    private fun dpToPx(dp: Int) = (dp * resources.displayMetrics.density).toInt()
++
++    /** 弹一下：放大再回落，作为切换完成/开始的视觉反馈 */
++    private fun pop() {
++        animate().cancel()
++        animate().scaleX(1.35f).scaleY(1.35f).setDuration(110).withEndAction {
++            animate().scaleX(1f).scaleY(1f).setDuration(140).start()
++        }.start()
++    }
++
++    override fun onAttachedToWindow() {
++        super.onAttachedToWindow()
++        handler.post(tick)
++    }
++
++    override fun onDetachedFromWindow() {
++        handler.removeCallbacks(tick)
++        animate().cancel()
++        alpha = 1f
++        super.onDetachedFromWindow()
++    }
++
++    private fun show(color: Int, detailText: String, glyph: String = "● AI") {
++        text = glyph
++        setTextColor(color)
++        detail = detailText
++        visibility = VISIBLE
++    }
++
++    /** 经 Shizuku 启动守护进程。userInitiated = 用户点的（可以弹授权/提示）；否则是静默的自动重试。 */
++    private fun startDaemon(userInitiated: Boolean) {
++        when (AiDaemonLauncher.availability()) {
++            AiDaemonLauncher.Availability.SHIZUKU_NOT_RUNNING ->
++                if (userInitiated) Toast.makeText(context, "Shizuku 没有运行：先启动 Shizuku", Toast.LENGTH_LONG).show()
++            AiDaemonLauncher.Availability.NEEDS_PERMISSION ->
++                if (userInitiated) AiDaemonLauncher.requestPermission { startDaemon(true) }   // 弹出 Shizuku 的授权请求
++            AiDaemonLauncher.Availability.READY -> {
++                startingUntil = SystemClock.uptimeMillis() + START_MS
++                show(YELLOW, "AI 重排：正在启动守护进程…", "◐ AI")
++                if (userInitiated) pop()
++                handler.removeCallbacks(tick)
++                handler.postDelayed(tick, FAST_MS)
++                AiDaemonLauncher.start(context) { r ->
++                    if (r is AiDaemonLauncher.Result.Failed) {
++                        startingUntil = 0
++                        if (userInitiated) Toast.makeText(context, r.reason, Toast.LENGTH_LONG).show()
++                    }
++                }
++            }
++        }
++    }
++
++    // 完成：弹一下并轻震一下确认；不弹提示（徽标颜色已经说明了状态）。超时放弃等待时安静收尾
++    private fun finishPending(quiet: Boolean = false) {
++        pendingTarget = null
++        alpha = 1f
++        if (!quiet) {
++            pop()
++            performHapticFeedback(HapticFeedbackConstants.CONFIRM)
++        }
++    }
++
++    private fun refresh() {
++        val f = DataManager.userDataDir.resolve("ai_status.json")
++        // 从没部署过守护进程：只有 Shizuku 在运行时才显示（红色，点一下就能启动）；否则隐藏
++        if (!f.exists() && AiDaemonLauncher.availability() == AiDaemonLauncher.Availability.SHIZUKU_NOT_RUNNING) {
++            visibility = GONE
++            return
++        }
++        val j =
++            try {
++                JSONObject(f.readText())
++            } catch (e: Exception) {
++                null
++            }
++        val age = if (j != null) System.currentTimeMillis() / 1000 - j.optLong("ts", 0) else Long.MAX_VALUE
++        val fresh = j != null && age <= STALE_S
++        val enabled = j?.optBoolean("enabled", true) ?: true
++        val loaded = j?.optBoolean("model_loaded") ?: false
++
++        // 点击之后：状态文件还没追上之前，显示"进行中"，追上了就收尾；超时则放弃等待，按真实状态显示
++        pendingTarget?.let { target ->
++            val done = fresh && enabled == target && (!target || loaded)
++            when {
++                done -> finishPending()
++                SystemClock.uptimeMillis() > pendingUntil -> finishPending(quiet = true)
++                else -> {
++                    if (target) {
++                        blinkOn = !blinkOn
++                        alpha = if (blinkOn) 1f else 0.35f          // 加载中：闪烁
++                        show(YELLOW, "AI 重排：开启中，正在加载模型…", "◐ AI")
++                    } else {
++                        show(GRAY, "AI 重排：关闭中…", "○ AI")
++                    }
++                    return
++                }
++            }
++        }
++
++        offlineNow = !fresh
++        if (!fresh) {
++            val now = SystemClock.uptimeMillis()
++            if (now < startingUntil) {                    // 刚经 Shizuku 启动，等它写出第一份状态
++                blinkOn = !blinkOn
++                alpha = if (blinkOn) 1f else 0.35f
++                show(YELLOW, "AI 重排：正在启动守护进程…", "◐ AI")
++                return
++            }
++            // 键盘弹出时发现守护进程不在：每分钟最多自动经 Shizuku 拉起一次（授权过的情况下）
++            if (System.currentTimeMillis() - AiDaemonLauncher.lastAttemptMs > AUTO_RETRY_MS &&
++                AiDaemonLauncher.availability() == AiDaemonLauncher.Availability.READY
++            ) {
++                startDaemon(userInitiated = false)
++            }
++        } else {
++            alpha = 1f
++        }
++
++        val restarts = j?.optInt("restarts", 0) ?: 0
++        val lastExit = j?.optString("last_exit", "none") ?: "none"
++        val history = if (restarts > 0) "\n累计重启 $restarts 次，上次退出：$lastExit" else ""
++        when {
++            fresh && !enabled ->
++                show(GRAY, "AI 重排：已关闭（点一下开启，长按看详情）\n模型已卸载，推理进程待命，不占 CPU 和内存", "○ AI")
++            !fresh ->
++                show(
++                    RED,
++                    "AI 重排：离线（守护进程没有响应）$history\n点一下经 Shizuku 启动（上次尝试：${AiDaemonLauncher.lastResult}）",
++                )
++            j!!.optString("role") == "supervisor" ->
++                show(YELLOW, "AI 重排：重启中\n上次退出：$lastExit（累计 $restarts 次）")
++            loaded ->
++                show(
++                    GREEN,
++                    "AI 重排：在线\n内存 ${j.optLong("rss_kb") / 1024} MB，" +
++                        "最近一次打分 ${j.optInt("last_score_ms")} ms（平均 ${"%.1f".format(j.optDouble("avg_score_ms"))} ms）\n" +
++                        "已处理 ${j.optLong("scores")} 次，跳过 ${j.optLong("skipped")} 次，错误 ${j.optLong("errors")} 次\n" +
++                        "屏幕${if (j.optString("screen") == "off") "熄灭" else "亮着"}，" +
++                        (j.optInt("idle_unload_sec").let { if (it > 0) "空闲 $it 秒后自动卸载" else "不自动卸载（点徽标关闭）" }) +
++                        history,
++                )
++            else ->
++                show(GRAY, "AI 重排：待机（模型还没加载，开始打字时自动加载）$history")
++        }
++    }
++
++    companion object {
++        private const val POLL_MS = 5000L
++        private const val FAST_MS = 400L
++        private const val PENDING_MS = 15000L
++        private const val START_MS = 20000L
++        private const val AUTO_RETRY_MS = 60000L
++        private const val STALE_S = 15
++        private val GREEN = Color.rgb(0x2E, 0xA0, 0x43)
++        private val GRAY = Color.rgb(0x8A, 0x8A, 0x8A)
++        private val YELLOW = Color.rgb(0xD9, 0xA4, 0x06)
++        private val RED = Color.rgb(0xD1, 0x24, 0x2F)
++    }
++}
+diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
+index 319e436a..c6e810aa 100644
+--- a/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
++++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
+@@ -26,6 +26,7 @@ import splitties.views.dsl.core.Ui
+ import splitties.views.dsl.core.add
+ import splitties.views.dsl.core.lParams
+ import splitties.views.dsl.core.matchParent
++import splitties.views.dsl.core.wrapContent
+ import timber.log.Timber
+ 
+ class AlwaysUi(
+@@ -82,6 +83,9 @@ class AlwaysUi(
+         R.drawable.ic_baseline_more_horiz_24,
+     )
+ 
++    // AI 重排守护进程状态：紧靠左侧按钮（没部署守护进程时自动隐藏）
++    private val aiStatusButton = AiStatusButton(ctx) { onButtonClick?.invoke(AiStatusButtonAction.TOGGLE) }
++
+     private val animator =
+         ViewAnimator(ctx).apply {
+             add(buttonsUi.root, lParams(matchParent, matchParent))
+@@ -107,10 +111,17 @@ class AlwaysUi(
+                 centerVertically()
+             },
+         )
++        add(
++            aiStatusButton,
++            lParams(wrapContent, leftHeight) {
++                after(leftMostButton)
++                centerVertically()
++            },
++        )
+         add(
+             animator,
+             lParams(matchConstraints, matchParent) {
+-                after(leftMostButton)
++                after(aiStatusButton)
+                 before(rightMostButton)
+                 endOfParent()
+                 centerVertically()
+@@ -129,7 +140,7 @@ class AlwaysUi(
+     fun toggleOptions(): Set<String> = buildSet {
+         leftMostButton.option?.let { add(it) }
+         buttonsUi.firstButton?.option?.let { add(it) }
+-        buttonsUi.root.children.forEach { (it as ToolButton).option?.let { add(it) } }
++        buttonsUi.root.children.filterIsInstance<ToolButton>().forEach { it.option?.let { opt -> add(opt) } }
+     }
+ 
+     fun updateState(state: State) {
+diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/ButtonsBarUi.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/ButtonsBarUi.kt
+index a01ab529..5fa3ed12 100644
+--- a/app/src/main/java/com/osfans/trime/ime/bar/ui/ButtonsBarUi.kt
++++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/ButtonsBarUi.kt
+@@ -81,12 +81,12 @@ class ButtonsBarUi(
+     }
+ 
+     fun updateStyle(option: String, enabled: Boolean) {
+-        root.children.forEach { (it as ToolButton).updateStyle(option, enabled) }
++        root.children.filterIsInstance<ToolButton>().forEach { it.updateStyle(option, enabled) }
+     }
+ 
+     /** Restyles the toolbar buttons after a scheme switch. */
+     fun refreshColors() {
+         firstButton?.refreshColors()
+-        root.children.forEach { (it as ToolButton).refreshColors() }
++        root.children.filterIsInstance<ToolButton>().forEach { it.refreshColors() }
+     }
+ }
+diff --git a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
+index 0b9b4ac8..48acf9c0 100644
+--- a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
++++ b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
+@@ -7,6 +7,9 @@ package com.osfans.trime.ime.core
+ 
+ import android.annotation.SuppressLint
+ import android.app.Dialog
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
+ import android.content.IntentFilter
+ import android.content.pm.ActivityInfo
+ import android.content.res.Configuration
+@@ -167,7 +170,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+         }
+     }
+ 
++    // 亮屏/熄屏通知 AI 重排：经 Rime 选项 screen_off 传给 Lua，Lua 再转给常驻推理进程（熄屏后更快卸载模型）
++    private val screenStateReceiver =
++        object : BroadcastReceiver() {
++            override fun onReceive(context: Context?, intent: Intent?) {
++                when (intent?.action) {
++                    Intent.ACTION_SCREEN_OFF -> postRimeJob { setRuntimeOption("screen_off", true) }
++                    Intent.ACTION_SCREEN_ON -> postRimeJob { setRuntimeOption("screen_off", false) }
++                }
++            }
++        }
++
+     private fun registerReceiver() {
++        ContextCompat.registerReceiver(
++            this,
++            screenStateReceiver,
++            IntentFilter().apply {
++                addAction(Intent.ACTION_SCREEN_OFF)
++                addAction(Intent.ACTION_SCREEN_ON)
++            },
++            ContextCompat.RECEIVER_NOT_EXPORTED,
++        )
+         val intentFilter =
+             IntentFilter().apply {
+                 addAction(RimeIntentReceiver.ACTION_DEPLOY)
+@@ -342,6 +365,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+         ColorManager.removeOnChangedListener(onColorChangeListener)
+         super.onDestroy()
+         unregisterReceiver(rimeIntentReceiver)
++        unregisterReceiver(screenStateReceiver)
+         RimeDaemon.destroySession(javaClass.name)
+     }
+ 
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index 651dfd11..6491ecb9 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -5,6 +5,7 @@ ksp = "2.3.6"
+ navigation = "2.9.8"
+ room = "2.7.2"
+ splitties = "3.0.0"
++shizuku = "13.1.5"
+ aboutlibraries = "14.0.1"
+ kotest = "6.0.7"
+ iconics = "5.4.0"
+@@ -33,6 +34,8 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
+ flexbox = { module = "com.google.android.flexbox:flexbox", version = "3.0.0" }
+ bravh = { module = "io.github.cymchad:BaseRecyclerViewAdapterHelper4", version = "4.4.1" }
+ timber = { module = "com.jakewharton.timber:timber", version = "5.0.1" }
++shizuku-api = { module = "dev.rikka.shizuku:api", version.ref = "shizuku" }
++shizuku-provider = { module = "dev.rikka.shizuku:provider", version.ref = "shizuku" }
+ xxpermissions = { module = "com.github.getActivity:XXPermissions", version = "18.5" }
+ iconics-core = { module = "com.mikepenz:iconics-core", version.ref = "iconics" }
+ community-material-typeface = { module = "com.mikepenz:community-material-typeface", version = "7.0.96.1-kotlin" }
