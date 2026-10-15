@@ -121,7 +121,7 @@ text = "\n".join(out)
 assert "mparams.use_mmap = 1;" in text
 # llama.cpp b11632 起 use_mmap 字段改为 load_mode 枚举
 text = text.replace("mparams.use_mmap = 1;",
-                    "mparams.load_mode = LLAMA_LOAD_MODE_MMAP;\n        mparams.n_gpu_layers = RIME_LLM_GPU_LAYERS;  // 0 = CPU 推理（默认，与上游一致）；cmake -DRIME_LLM_METAL=ON 时为 99\n        mparams.use_extra_bufts = false;  // 关闭权重重排：权重直接用文件映射，不再复制成私有内存（省约 500 MB）")
+                    "mparams.load_mode = LLAMA_LOAD_MODE_MMAP;\n        mparams.n_gpu_layers = RIME_LLM_GPU_LAYERS;  // 0 = CPU 推理（默认，与上游一致）；cmake -DRIME_LLM_METAL=ON 时为 99\n        mparams.use_extra_bufts = g_use_repack;  // 默认关闭权重重排（Lua 属性 use_repack 可在加载前打开）：权重直接用文件映射，不再复制成私有内存（省约 500 MB）；-DRIME_LLM_REPACK=ON 可开启")
 
 # ---- 不阻塞输入：打分不在主线程上等锁，上文没预解码好时可选择直接跳过 ----
 def patch(old, new):
@@ -132,12 +132,16 @@ def patch(old, new):
 # 跳过标志（仅主线程读写）
 patch("#include <cstdio>\n",
       "#include <cstdio>\n\n"
+      "#ifndef RIME_LLM_REPACK\n"
+      "#define RIME_LLM_REPACK 0       // 1 = 开启 llama.cpp 的 CPU 权重重排（更快，但模型变成私有内存，约多 500 MB）\n"
+      "#endif\n"
       "#ifndef RIME_LLM_GPU_LAYERS\n"
       "#define RIME_LLM_GPU_LAYERS 0   // 0 = CPU；cmake -DRIME_LLM_METAL=ON 时由构建系统定义为 99\n"
       "#endif\n")
 
 patch("static int g_score_log_cnt = 0;",
       "static int g_score_log_cnt = 0;\n"
+      "static bool g_use_repack = (RIME_LLM_REPACK != 0);   // 是否做 CPU 权重重排：更快，但模型变成私有内存（约多 500 MB）；加载前设置才有效\n"
       "static bool g_score_skipped = false;       // 本次 score 被跳过（锁被占用 / 上文未预解码）\n"
       "static bool g_score_require_prep = false;  // 本次 score 要求上文已预解码，否则跳过\n"
       "static const char * g_score_skip_reason = \"\";  // 跳过原因：busy（后台预解码持锁）| unprepared（上文未预解码）")
@@ -244,13 +248,19 @@ patch("        if (!g_atexit_registered.exchange(true)) std::atexit(cleanup_at_e
 patch("static int lua_prepare(lua_State * L) {\n", "static int lua_prepare(lua_State * L) {\n    touch_use();\n")
 patch("static int lua_score(lua_State * L) {\n",   "static int lua_score(lua_State * L) {\n    touch_use();\n")
 patch("static int lua_index(lua_State * L) {",
+      "// 高精度单调时钟（毫秒，带小数），测试用：量 P50/P95 延迟\n"
+      "static int lua_now_ms(lua_State * L) {\n"
+      "    lua_pushnumber(L, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count());\n"
+      "    return 1;\n"
+      "}\n\n"
       "// 每次按键由 Lua 处理器调用：刷新“最近使用”时间（只做一次原子写，几乎没有开销）\n"
       "static int lua_touch(lua_State * L) { (void)L; touch_use(); return 0; }\n\n"
       "static int lua_index(lua_State * L) {")
 patch("    else if (strcmp(key, \"n_seq_max\") == 0) lua_pushinteger(L, g_n_seq_max);\n    else lua_pushnil(L);",
-      "    else if (strcmp(key, \"n_seq_max\") == 0) lua_pushinteger(L, g_n_seq_max);\n    else if (strcmp(key, \"touch\") == 0) lua_pushcfunction(L, lua_touch);\n    else if (strcmp(key, \"idle_unload_sec\") == 0) lua_pushinteger(L, (lua_Integer)(g_idle_unload_ms.load() / 1000));\n    else lua_pushnil(L);")
+      "    else if (strcmp(key, \"n_seq_max\") == 0) lua_pushinteger(L, g_n_seq_max);\n    else if (strcmp(key, \"touch\") == 0) lua_pushcfunction(L, lua_touch);\n    else if (strcmp(key, \"use_repack\") == 0) lua_pushboolean(L, g_use_repack ? 1 : 0);\n    else if (strcmp(key, \"now_ms\") == 0) lua_pushcfunction(L, lua_now_ms);\n    else if (strcmp(key, \"idle_unload_sec\") == 0) lua_pushinteger(L, (lua_Integer)(g_idle_unload_ms.load() / 1000));\n    else lua_pushnil(L);")
 patch("    else if (strcmp(key, \"log_dir\") == 0)    g_log_dir = luaL_checkstring(L, 3);  // RIME 用户目录",
       "    else if (strcmp(key, \"log_dir\") == 0)    g_log_dir = luaL_checkstring(L, 3);  // RIME 用户目录\n"
+      "    else if (strcmp(key, \"use_repack\") == 0) g_use_repack = lua_toboolean(L, 3) != 0;\n"
       "    else if (strcmp(key, \"idle_unload_sec\") == 0) {   // 空闲多少秒后卸载模型，0 = 不卸载\n"
       "        g_idle_unload_ms.store((long long)luaL_checkinteger(L, 3) * 1000);\n"
       "        touch_use();\n"
