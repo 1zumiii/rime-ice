@@ -47,3 +47,30 @@ patch:
   # 「VIP中P」→「VIP 中 P」。插在 pin_cand_filter 之后；
   # 补丁键按字典序依次生效，下标依赖上面 @before 4 的插入，改动过滤器列表时要一起检查。
   "engine/filters/@before 6": lua_filter@*cn_en_spacer
+
+  # ---------- 8. AI 重排（实验）----------
+  # 本地小模型（Qwen3.5-0.8B）按「本会话内上屏的内容」重排候选，详见 llm-mac/README.md。
+  # 需要先安装 rime_llm.so 和模型；没装时这两个组件什么都不做（开关关闭时直接放行/透传）。
+  # 开关：默认开；Control+Shift+5 或方案菜单（F4 / Control+`）里的「AI 关/开」可在当前输入框临时切换。
+  # 位置：processor 放最前，filter 放最后（uniquifier 之后）；这两个位置各只能给一个组件用。
+  "engine/processors/@before 0": lua_processor@*ai_rerank_processor
+  "engine/filters/@after last": lua_filter@*ai_rerank_filter
+  # 默认开（reset: 1）：鼠须管的开关状态是每个应用/输入框各管各的，新输入框会回到默认状态，
+  # 所以默认值必须是开；Control+Shift+5 只在当前输入框里临时开/关。
+  "switches/@next": { name: ai_rerank, reset: 1, states: [ "AI 关", "AI 开" ], abbrev: [ "AI关", "AI开" ] }
+  # 快捷键切换 AI（不用进方案菜单）。Control+Shift+3/4 已被默认配置占用（中英标点、简繁）
+  key_binder/bindings:
+    - { when: always, toggle: ai_rerank, accept: "Control+Shift+5" }
+    - { when: always, toggle: ai_rerank, accept: "Control+Shift+percent" }
+  llm_rerank:
+    code_pattern: '[a-z]{3,}'   # 只在 3 个字母及以上的输入触发，避开置顶的单字/简拼
+    max_candidates: 5
+    max_tokens: 10
+    expected_length_weight: 0   # 全拼保持 0
+    freq_beta: 1.5
+    scan_limit: 80
+    badge: "◇"                  # AI 按上文重排后的首选（单字符省空间）
+    badge2: "◈"                 # 两阶段拼出来的首选（四字 = 两个两字词）
+    # debug_latency: true      # 排查用：只记录跳过原因和耗时（llm_errors.txt / llm_latency.txt），不含任何输入文字
+    # cpu_cores: 4              # 实测 4 线程最合适
+    # model_path: '~/Library/Rime/Qwen3.5-0.8B-Q4_K_M.gguf'   # 默认就是这个位置

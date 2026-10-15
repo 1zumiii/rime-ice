@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.20)
+project(rime_llm_mac CXX C)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "" FORCE)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# llama.cpp：静态链接，CPU 版，不构建示例/测试/服务器
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+
+set(LLAMA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp" CACHE PATH "")
+set(LUA_INC   "${CMAKE_CURRENT_SOURCE_DIR}/deps/lua-5.4.6/src" CACHE PATH "")
+add_subdirectory(${LLAMA_DIR} llama EXCLUDE_FROM_ALL)
+
+# Lua C 模块：Squirrel 的 librime-lua.dylib 导出全部 lua_* 符号，运行时解析
+add_library(rime_llm MODULE rime_llm_mac.cpp)
+set_target_properties(rime_llm PROPERTIES PREFIX "" SUFFIX ".so")
+target_include_directories(rime_llm PRIVATE ${LUA_INC} ${LLAMA_DIR}/include ${LLAMA_DIR}/ggml/include)
+target_link_libraries(rime_llm PRIVATE llama)
+target_link_options(rime_llm PRIVATE -undefined dynamic_lookup)
