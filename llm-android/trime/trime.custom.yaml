@@ -1,0 +1,6 @@
+# Trime 主题补丁（对应默认主题 trime）：键帽整体矮约 1/10。
+# Trime 的各行键高是按比例缩放到 keyboard_height 的，所以只要整体缩小，所有键帽就一起变矮。
+# 这是标准的 <主题>.custom.yaml 补丁，不修改 Trime 自己管理的主题文件，升级也不会被覆盖。
+patch:
+  style/keyboard_height: 225        # 竖屏，原 250
+  style/keyboard_height_land: 180   # 横屏，原 200
