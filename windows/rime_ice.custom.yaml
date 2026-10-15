@@ -33,6 +33,13 @@ patch:
   translator/max_homophones: 7
   translator/max_homographs: 7
 
+  # ---------- emoji 推迟到第二页（lua/emoji_defer_filter.lua） ----------
+  # 第一页只放文字候选，emoji 从第 page_size+1 位开始。必须在 simplifier@emoji 之后。
+  # 用 @after 10：10 是官方 filters 列表里 uniquifier 的下标（补丁键按字典序生效，
+  # "@after 10" 先于 "@after last" 和所有 "@before …" 生效，所以下标仍然指向官方原列表）。
+  # 官方调整过滤器列表后这个下标要跟着改；tools/verify_build.sh 会检查顺序。
+  "engine/filters/@after 10": lua_filter@*emoji_defer_filter
+
   # ---------- LLM 重排（rime-llm-rerank）：按你 llm_quanpin 方案里已验证的写法填，默认注释掉 ----------
   # LLM 的 processor 要放在 processors 最前，filter 要放在 filters 最后（uniquifier 之后）
   # "engine/processors/@before 0": lua_processor@*llm_processor

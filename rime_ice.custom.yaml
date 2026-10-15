@@ -48,6 +48,13 @@ patch:
   # 补丁键按字典序依次生效，下标依赖上面 @before 4 的插入，改动过滤器列表时要一起检查。
   "engine/filters/@before 6": lua_filter@*cn_en_spacer
 
+  # ---------- emoji 推迟到第二页（lua/emoji_defer_filter.lua） ----------
+  # 第一页只放文字候选，emoji 从第 page_size+1 位开始。必须在 simplifier@emoji 之后。
+  # 用 @after 10：10 是官方 filters 列表里 uniquifier 的下标（补丁键按字典序生效，
+  # "@after 10" 先于 "@after last" 和所有 "@before …" 生效，所以下标仍然指向官方原列表）。
+  # 官方调整过滤器列表后这个下标要跟着改；tools/verify_build.sh 会检查顺序。
+  "engine/filters/@after 10": lua_filter@*emoji_defer_filter
+
   # ---------- 8. AI 重排（实验）----------
   # 本地小模型（Qwen3.5-0.8B）按「本会话内上屏的内容」重排候选，详见 llm-mac/README.md。
   # 需要先安装 rime_llm.so 和模型；没装时这两个组件什么都不做（开关关闭时直接放行/透传）。
