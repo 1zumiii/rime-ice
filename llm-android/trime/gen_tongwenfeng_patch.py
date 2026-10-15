@@ -51,7 +51,8 @@ def number_page():
     keys.append(K(click="Keyboard_default", width=15, key_back_color="bgn", key_text_color="tgn"))  # 返回
     keys.append(K(click=",", long_click="<", width=10, key_back_color="bgn", key_text_color="tgn"))
     keys.append(K(click="Keyboard_numpad", width=10, key_back_color="bgn", key_text_color="tgn"))   # 1234
-    keys.append(K(click="space", long_click="Mode_switch", width=40, key_text_size="16", key_back_color="bkg", key_text_color="tkg"))
+    # 这一页被设成英文模式（为了输出半角符号），而 space 的预设标签在英文模式下是 English；GBoard 这页显示键盘语言「拼音」，所以用固定标签的 space_py
+    keys.append(K(click="space_py", long_click="Mode_switch", width=40, key_text_size="16", key_back_color="bkg", key_text_color="tkg"))
     keys.append(K(click=".", long_click=">", width=10, key_back_color="bgn", key_text_color="tgn"))
     keys.append(K(click="Return", long_click="Menu", width=15, key_back_color="benter", key_text_color="tenter"))
     return keys
@@ -116,6 +117,7 @@ patch["preset_keys/BackSpace2/label"] = ICON_BS
 patch["preset_keys/Keyboard_number/label"] = "?123"
 # 空格键标签：中文模式用按键自己的 label（拼音），英文模式用预设标签（English）——Trime 的规则是按键 label 只在中文模式生效
 patch["preset_keys/space/label"] = "English"
+patch["preset_keys/space_py"] = {"repeatable": False, "preview": " ", "functional": False, "slide_cursor": True, "label": "拼音", "send": "space"}
 patch["preset_keys/Keyboard_emoji"] = {"label": ICON_EMOJI, "functional": False, "send": "Eisu_toggle", "select": "bqrw1"}
 patch["preset_keys/Keyboard_numpad"] = {"label": "1234", "functional": False, "send": "Eisu_toggle", "select": "numpad"}
 patch["preset_keys/Keyboard_fh"] = {"label": "=\\<", "functional": True, "send": "Eisu_toggle", "select": "fh1"}
@@ -133,15 +135,12 @@ _bqrw1 = pk["bqrw1"]["keys"]
 _idx = [i for i, k in enumerate(_bqrw1) if k.get("click") == "\u263a"]
 assert len(_idx) == 1, _idx
 patch[f"preset_keyboards/bqrw1/keys/@{_idx[0]}/click"] = "\u263a\ufe0f"
-# ---- 流式键盘（长按 😊 / 工具栏表情按钮进入的页面）：行列和尺寸向符号页看齐 ----
-# 网格是自动换行的：列数 = (屏宽 - 2*margin_x) / (single_width + 2*margin_x)。屏宽约 393dp，margin_x 4、single_width 46 → 正好 7 列。
-patch["liquid_keyboard/single_width"] = 46
-patch["liquid_keyboard/margin_x"] = 4
-patch["liquid_keyboard/row"] = 4
-patch["liquid_keyboard/row_land"] = 3
+# ---- 流式键盘（长按 😊 / 工具栏表情按钮进入的页面）：和表情页（bqrw1，每行 10 个键）看齐 ----
+# 改版 Trime（见 patches/）里它是一个列数由行宽算出来的网格：每格至少 single_width + 2*margin_x 宽，
+# 屏宽约 393dp、single_width 34、margin_x 2 → 每格至少 38dp → 10 列；高度是 key_height。只有这三项会被读取。
+patch["liquid_keyboard/single_width"] = 34
+patch["liquid_keyboard/margin_x"] = 2
 patch["liquid_keyboard/key_height"] = 36
-patch["liquid_keyboard/key_height_land"] = 34
-patch["liquid_keyboard/vertical_gap"] = 5
 # 底部固定按键条把预设按键的 label 当纯文本显示，不认 ic@ 图标，所以给它单独一个文字标签的退格
 patch["preset_keys/BackSpace3"] = {"label": "退格", "repeatable": True, "functional": False, "send": "BackSpace"}
 patch["liquid_keyboard/fixed_key_bar/keys"] = ["liquid_keyboard_exit", "space1", "BackSpace3", "Return2", "clipboard_window", "liquid_keyboard_tabs"]

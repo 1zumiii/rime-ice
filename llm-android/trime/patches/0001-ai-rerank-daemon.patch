@@ -582,41 +582,474 @@ index 0b9b4ac8..48acf9c0 100644
          RimeDaemon.destroySession(javaClass.name)
      }
  
+diff --git a/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt b/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt
+index 897c6e5a..0e016323 100644
+--- a/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt
++++ b/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt
+@@ -4,6 +4,7 @@
+ 
+ package com.osfans.trime.ime.keyboard
+ 
++import androidx.transition.Transition
+ import android.graphics.Point
+ import android.os.Build
+ import android.text.InputType
+@@ -75,6 +76,11 @@ class KeyboardWindow(di: DI) :
+         lateinit var currentKeyboard: Keyboard
+     }
+ 
++    // 和键盘页面之间的切换一致：不要从顶部滑入
++    override fun enterAnimation(lastWindow: BoardWindow): Transition? = null
++
++    override fun exitAnimation(nextWindow: BoardWindow): Transition? = null
++
+     override val key: ResidentWindow.Key
+         get() = KeyboardWindow
+ 
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/AutoSpanGridLayoutManager.kt b/app/src/main/java/com/osfans/trime/ime/symbol/AutoSpanGridLayoutManager.kt
+new file mode 100644
+index 00000000..96acb0fb
+--- /dev/null
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/AutoSpanGridLayoutManager.kt
+@@ -0,0 +1,28 @@
++/*
++ * SPDX-FileCopyrightText: 2026 1zumiii
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++package com.osfans.trime.ime.symbol
++
++import android.content.Context
++import androidx.recyclerview.widget.GridLayoutManager
++import androidx.recyclerview.widget.RecyclerView
++
++/**
++ * 列数由行宽决定的网格：每格至少 [minCellPx] 宽，一行放得下几格就几列，剩余宽度平均分给每一格。
++ * 布局前先算好列数，所以第一次排版就是对的（不会出现先排错、滚动后才恢复的情况）。
++ */
++class AutoSpanGridLayoutManager(
++    context: Context,
++    private val minCellPx: Int,
++) : GridLayoutManager(context, 1) {
++    override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
++        val usable = width - paddingLeft - paddingRight
++        if (usable > 0 && minCellPx > 0) {
++            val span = maxOf(1, usable / minCellPx)
++            if (span != spanCount) spanCount = span
++        }
++        super.onLayoutChildren(recycler, state)
++    }
++}
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidAdapter.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidAdapter.kt
+index ce5c72ab..018bb045 100644
+--- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidAdapter.kt
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidAdapter.kt
+@@ -7,14 +7,11 @@ package com.osfans.trime.ime.symbol
+ 
+ import android.content.Context
+ import android.view.ViewGroup
+-import androidx.core.view.updateLayoutParams
+ import androidx.recyclerview.widget.RecyclerView
+ import com.chad.library.adapter4.BaseQuickAdapter
+ import com.osfans.trime.data.theme.ThemeScope
+ import com.osfans.trime.data.theme.model.LiquidKeyboard
+-import com.osfans.trime.ime.core.AutoScaleTextView
+ import splitties.dimensions.dp
+-import splitties.views.gravityCenter
+ 
+ class LiquidAdapter(
+     private val scope: ThemeScope,
+@@ -29,14 +26,15 @@ class LiquidAdapter(
+         parent: ViewGroup,
+         viewType: Int,
+     ): ViewHolder {
+-        val ui = LiquidItemUi(context, scope)
+-        ui.mainText.apply {
+-            scaleMode = AutoScaleTextView.Mode.Proportional
+-            gravity = gravityCenter
+-            updateLayoutParams {
+-                width = context.dp(scope.theme.liquidKeyboard.singleWidth)
+-            }
+-        }
++        val cfg = scope.theme.liquidKeyboard
++        // 格子的宽度由网格按列数等分（见 AutoSpanGridLayoutManager），高度是 key_height；
++        // 按键四周留 margin_x 的空隙（算在格子内部），所以行间距和列间距一样是 margin_x 的两倍。
++        val gap = context.dp(cfg.marginX.toInt())
++        val ui = LiquidItemUi(context, scope, gapX = gap, gapY = gap)
++        ui.root.layoutParams = RecyclerView.LayoutParams(
++            ViewGroup.LayoutParams.MATCH_PARENT,
++            context.dp(cfg.keyHeight) + 2 * gap,
++        )
+         return ViewHolder(ui)
+     }
+ 
 diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
-index 0dc1341e..f4d14ffa 100644
+index 0dc1341e..1dbd0c83 100644
 --- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
-@@ -25,6 +25,8 @@ import splitties.views.setPaddingDp
+@@ -14,17 +14,31 @@ import splitties.dimensions.dp
+ import splitties.views.dsl.constraintlayout.centerInParent
+ import splitties.views.dsl.constraintlayout.constraintLayout
+ import splitties.views.dsl.constraintlayout.lParams
++import splitties.views.dsl.constraintlayout.matchConstraints
+ import splitties.views.dsl.core.Ui
+ import splitties.views.dsl.core.add
+ import splitties.views.dsl.core.lParams
+ import splitties.views.dsl.core.matchParent
+ import splitties.views.dsl.core.view
+ import splitties.views.dsl.core.wrapContent
++import splitties.views.gravityCenter
+ import splitties.views.setPaddingDp
+ 
++/**
++ * 流式键盘里的一个按键（网格里的符号，或底部/顶部按键条里的按钮）。
++ *
++ * 尺寸完全由外面给：格子的宽高由网格/按键条决定，这里只负责
++ * - [gapX]/[gapY]：按键四周留的空隙（像素），空隙算在格子内部，所以相邻格子之间的间距是它的两倍；
++ * - [flat]：不画按键背景，只显示文字（按键条用）；
++ * - [textScale]：相对主题按键字号的比例。
++ */
  class LiquidItemUi(
      override val ctx: Context,
      private val scope: ThemeScope,
-+    // 底部固定按键条的文字比格子里的符号小一些，上下栏不显得挤
 +    textScale: Float = 1f,
++    private val flat: Boolean = false,
++    gapX: Int = 0,
++    gapY: Int = 0,
  ) : Ui {
      private val theme: Theme get() = scope.theme
  
-@@ -32,7 +34,7 @@ class LiquidItemUi(
+@@ -32,39 +46,38 @@ class LiquidItemUi(
          isClickable = false
          isFocusable = false
          background = null
 -        textSize = theme.style.keyTextSize
 +        textSize = theme.style.keyTextSize * textScale
          typeface = theme.fonts.key
-         setPaddingDp(8, 4, 8, 4)
+-        setPaddingDp(8, 4, 8, 4)
++        gravity = gravityCenter
++        scaleMode = AutoScaleTextView.Mode.Proportional   // 文字比格子宽时整体缩小
++        setPaddingDp(4, 2, 4, 2)
          setTextColor(scope.colors.keyTextColor)
+     }
+ 
+-    private val content = constraintLayout {
+-        background = scope.decorDrawable(
++    private fun keyBackground() = if (flat) {
++        null
++    } else {
++        scope.decorDrawable(
+             "key_back_color",
+             "key_border_color",
+-            dp(theme.style.keyBorder),
+-            dp(theme.style.roundCorner),
+-        )
+-        add(
+-            mainText,
+-            lParams(wrapContent, wrapContent) {
+-                centerInParent()
+-            },
++            ctx.dp(theme.style.keyBorder),
++            ctx.dp(theme.style.roundCorner),
+         )
+     }
+ 
++    private val content = constraintLayout {
++        background = keyBackground()
++        add(mainText, lParams(matchConstraints, wrapContent) { centerInParent() })
++    }
++
+     override val root = view(::GestureFrame) {
++        setPadding(gapX, gapY, gapX, gapY)
+         add(content, lParams(matchParent, matchParent))
+     }
+ 
+     /** Restyles the item after a scheme switch. */
+     fun refreshColors() {
+         mainText.setTextColor(scope.colors.keyTextColor)
+-        content.background = scope.decorDrawable(
+-            "key_back_color",
+-            "key_border_color",
+-            ctx.dp(theme.style.keyBorder),
+-            ctx.dp(theme.style.roundCorner),
+-        )
++        content.background = keyBackground()
+     }
+ }
 diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
-index 3b509ae8..7eac65b3 100644
+index 3b509ae8..2612512b 100644
 --- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
-@@ -59,7 +59,7 @@ class LiquidLayout(
-                     Array(fixedKeys.size) { index ->
-                         val presetKeyName = fixedKeys[index]
-                         val presetKey = theme.presetKeys[presetKeyName]
+@@ -6,216 +6,72 @@ package com.osfans.trime.ime.symbol
+ 
+ import android.annotation.SuppressLint
+ import android.content.Context
+-import android.widget.FrameLayout
+-import androidx.constraintlayout.widget.ConstraintLayout
+-import androidx.core.view.setPadding
++import android.view.ViewGroup.LayoutParams.MATCH_PARENT
++import android.widget.LinearLayout
++import androidx.recyclerview.widget.RecyclerView
+ import com.osfans.trime.data.theme.Theme
+ import com.osfans.trime.data.theme.ThemeScope
+ import com.osfans.trime.data.theme.model.LiquidKeyboard
+ import com.osfans.trime.ime.keyboard.CommonKeyboardActionListener
+ import splitties.dimensions.dp
+-import splitties.views.dsl.constraintlayout.above
+-import splitties.views.dsl.constraintlayout.after
+-import splitties.views.dsl.constraintlayout.before
+-import splitties.views.dsl.constraintlayout.below
+-import splitties.views.dsl.constraintlayout.bottomOfParent
+-import splitties.views.dsl.constraintlayout.bottomToTopOf
+-import splitties.views.dsl.constraintlayout.centerHorizontally
+-import splitties.views.dsl.constraintlayout.centerVertically
+-import splitties.views.dsl.constraintlayout.constraintLayout
+-import splitties.views.dsl.constraintlayout.endOfParent
+-import splitties.views.dsl.constraintlayout.endToStartOf
+-import splitties.views.dsl.constraintlayout.lParams
+-import splitties.views.dsl.constraintlayout.matchConstraints
+-import splitties.views.dsl.constraintlayout.startOfParent
+-import splitties.views.dsl.constraintlayout.startToEndOf
+-import splitties.views.dsl.constraintlayout.topOfParent
+-import splitties.views.dsl.constraintlayout.topToBottomOf
+-import splitties.views.dsl.core.add
+-import splitties.views.dsl.core.lParams
+-import splitties.views.dsl.core.matchParent
+-import splitties.views.dsl.core.view
+-import splitties.views.dsl.core.wrapContent
+-import splitties.views.dsl.recyclerview.recyclerView
+ 
++/**
++ * 流式键盘的整体布局：一个符号网格 + 一条固定按键条（位置 top/bottom/left/right）。
++ * 就是一个线性布局：网格占满剩下的空间，按键条固定厚度、里面的按钮等分。
++ */
+ @SuppressLint("ViewConstructor")
+ class LiquidLayout(
+     context: Context,
+     private val scope: ThemeScope,
+-    commonKeyboardActionListener: CommonKeyboardActionListener,
+-) : ConstraintLayout(context) {
++    private val commonKeyboardActionListener: CommonKeyboardActionListener,
++) : LinearLayout(context) {
+     private val theme: Theme get() = scope.theme
++    private val position = theme.liquidKeyboard.fixedKeyBar.position
++    private val barIsVertical =
++        position == LiquidKeyboard.KeyBar.Position.LEFT || position == LiquidKeyboard.KeyBar.Position.RIGHT
+ 
+-    // TODO: 继承一个键盘视图嵌入到这里，而不是自定义一个视图
+     // The fixed-key items, kept so their colors can be refreshed on scheme switches.
+     private val fixedKeyItems = mutableListOf<LiquidItemUi>()
+ 
+-    private val fixedKeyBar =
+-        constraintLayout {
+-            val fixedKeys =
+-                theme.liquidKeyboard.fixedKeyBar.keys
+-            if (fixedKeys.isNotEmpty()) {
+-                val btns =
+-                    Array(fixedKeys.size) { index ->
+-                        val presetKeyName = fixedKeys[index]
+-                        val presetKey = theme.presetKeys[presetKeyName]
 -                        val ui = LiquidItemUi(context, scope)
-+                        val ui = LiquidItemUi(context, scope, textScale = 0.7f)
-                         fixedKeyItems += ui
-                         ui.mainText.text = presetKey?.label ?: ""
-                         ui.root.apply {
+-                        fixedKeyItems += ui
+-                        ui.mainText.text = presetKey?.label ?: ""
+-                        ui.root.apply {
+-                            isRepeatable = presetKey?.repeatable ?: false
+-                            onClick = {
+-                                commonKeyboardActionListener.listener.onAction(
+-                                    theme.resolveAction(presetKeyName),
+-                                )
+-                            }
+-                        }
+-                        return@Array ui.root
+-                    }
+-                val marginX = theme.liquidKeyboard.marginX
+-                when (theme.liquidKeyboard.fixedKeyBar.position) {
+-                    LiquidKeyboard.KeyBar.Position.LEFT,
+-                    LiquidKeyboard.KeyBar.Position.RIGHT,
+-                    -> {
+-                        btns.forEachIndexed { i, btn ->
+-                            add(
+-                                btn,
+-                                lParams(wrapContent, matchConstraints) {
+-                                    if (i == 0) {
+-                                        topOfParent()
+-                                    } else {
+-                                        topMargin = dp(marginX).toInt()
+-                                        below(btns[i - 1])
+-                                    }
+-                                    if (i == btns.size - 1) {
+-                                        bottomOfParent()
+-                                    } else {
+-                                        bottomMargin = dp(marginX).toInt()
+-                                        above(btns[i + 1])
+-                                    }
+-                                },
+-                            )
+-                        }
+-                    }
++    val tabsUi = LiquidTabsUi(context, scope)
++
++    val recyclerView = RecyclerView(context)
+ 
+-                    LiquidKeyboard.KeyBar.Position.TOP,
+-                    LiquidKeyboard.KeyBar.Position.BOTTOM,
+-                    -> {
+-                        btns.forEachIndexed { i, btn ->
+-                            add(
+-                                btn,
+-                                lParams(wrapContent, matchConstraints) {
+-                                    if (i == 0) {
+-                                        startOfParent()
+-                                    } else {
+-                                        leftMargin = dp(marginX).toInt()
+-                                        after(btns[i - 1])
+-                                    }
+-                                    if (i == btns.size - 1) {
+-                                        endOfParent()
+-                                    } else {
+-                                        rightMargin = dp(marginX).toInt()
+-                                        before(btns[i + 1])
+-                                    }
+-                                },
+-                            )
+-                        }
++    private fun buildBar(): LinearLayout? {
++        val names = theme.liquidKeyboard.fixedKeyBar.keys
++        if (names.isEmpty()) return null
++        return LinearLayout(context).apply {
++            orientation = if (barIsVertical) VERTICAL else HORIZONTAL
++            names.forEach { name ->
++                val presetKey = theme.presetKeys[name]
++                // 按键条上的文字比格子里的符号小一些、不画按键背景；按钮等分整条
++                val ui = LiquidItemUi(context, scope, textScale = BAR_TEXT_SCALE, flat = true)
++                fixedKeyItems += ui
++                ui.mainText.text = presetKey?.label ?: ""
++                ui.root.apply {
++                    isRepeatable = presetKey?.repeatable ?: false
++                    onClick = {
++                        commonKeyboardActionListener.listener.onAction(theme.resolveAction(name))
+                     }
+                 }
++                addView(
++                    ui.root,
++                    if (barIsVertical) LayoutParams(MATCH_PARENT, 0, 1f) else LayoutParams(0, MATCH_PARENT, 1f),
++                )
+             }
+         }
+-
+-    val recyclerView =
+-        recyclerView {
+-            val space = dp(theme.liquidKeyboard.marginX.toInt())
+-            addItemDecoration(SpacesItemDecoration(space))
+-            setPadding(space)
+-        }
+-
+-    val root = view(::FrameLayout) {
+-        add(recyclerView, lParams(matchParent, matchParent))
+     }
+ 
+-    val tabsUi = LiquidTabsUi(context, scope)
+-
+     init {
+-        when (theme.liquidKeyboard.fixedKeyBar.position) {
+-            LiquidKeyboard.KeyBar.Position.TOP -> {
+-                add(
+-                    root,
+-                    lParams {
+-                        centerHorizontally()
+-                        topToBottomOf(fixedKeyBar)
+-                        bottomOfParent()
+-                    },
+-                )
+-                add(
+-                    fixedKeyBar,
+-                    lParams(wrapContent, wrapContent) {
+-                        centerHorizontally()
+-                        topOfParent()
+-                        bottomToTopOf(root)
+-                    },
+-                )
+-            }
+-
+-            LiquidKeyboard.KeyBar.Position.BOTTOM -> {
+-                add(
+-                    root,
+-                    lParams {
+-                        centerHorizontally()
+-                        topOfParent()
+-                        bottomToTopOf(fixedKeyBar)
+-                    },
+-                )
+-                add(
+-                    fixedKeyBar,
+-                    lParams(wrapContent, wrapContent) {
+-                        centerHorizontally()
+-                        topToBottomOf(root)
+-                        bottomOfParent()
+-                    },
+-                )
+-            }
+-
+-            LiquidKeyboard.KeyBar.Position.LEFT -> {
+-                add(
+-                    root,
+-                    lParams {
+-                        centerVertically()
+-                        startToEndOf(fixedKeyBar)
+-                        endOfParent()
+-                    },
+-                )
+-                add(
+-                    fixedKeyBar,
+-                    lParams(wrapContent, matchConstraints) {
+-                        centerVertically()
+-                        startOfParent()
+-                        endToStartOf(root)
+-                    },
+-                )
+-            }
+-
+-            LiquidKeyboard.KeyBar.Position.RIGHT -> {
+-                add(
+-                    root,
+-                    lParams {
+-                        centerVertically()
+-                        startOfParent()
+-                        endToStartOf(fixedKeyBar)
+-                    },
+-                )
+-                add(
+-                    fixedKeyBar,
+-                    lParams(wrapContent, matchConstraints) {
+-                        centerVertically()
+-                        startToEndOf(root)
+-                        endOfParent()
+-                    },
+-                )
+-            }
+-        }
++        orientation = if (barIsVertical) HORIZONTAL else VERTICAL
++        val bar = buildBar()
++        val barParams =
++            if (barIsVertical) LayoutParams(dp(BAR_THICKNESS_DP), MATCH_PARENT) else LayoutParams(MATCH_PARENT, dp(BAR_THICKNESS_DP))
++        val gridParams = if (barIsVertical) LayoutParams(0, MATCH_PARENT, 1f) else LayoutParams(MATCH_PARENT, 0, 1f)
++        val barFirst = position == LiquidKeyboard.KeyBar.Position.TOP || position == LiquidKeyboard.KeyBar.Position.LEFT
++        if (bar != null && barFirst) addView(bar, barParams)
++        addView(recyclerView, gridParams)
++        if (bar != null && !barFirst) addView(bar, barParams)
+     }
+ 
+     fun refreshColors() {
+@@ -223,4 +79,9 @@ class LiquidLayout(
+         tabsUi.refreshColors()
+         recyclerView.adapter?.notifyDataSetChanged()
+     }
++
++    private companion object {
++        const val BAR_TEXT_SCALE = 0.62f
++        const val BAR_THICKNESS_DP = 44   // 和表情页底部的导航行差不多高，避免太矮误触
++    }
+ }
 diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt
 index 8e2d5de8..1f4d6f62 100644
 --- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt
@@ -630,6 +1063,55 @@ index 8e2d5de8..1f4d6f62 100644
                  typeface = theme.fonts.candidate
                  setTextColor(scope.colors.candidateTextColor)
              }
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidWindow.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidWindow.kt
+index e30136ae..e0d468eb 100644
+--- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidWindow.kt
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidWindow.kt
+@@ -5,11 +5,9 @@
+ 
+ package com.osfans.trime.ime.symbol
+ 
++import androidx.transition.Transition
+ import android.view.View
+ import androidx.core.content.ContextCompat
+-import com.google.android.flexbox.FlexDirection
+-import com.google.android.flexbox.FlexWrap
+-import com.google.android.flexbox.FlexboxLayoutManager
+ import com.osfans.trime.daemon.RimeSession
+ import com.osfans.trime.daemon.launchOnReady
+ import com.osfans.trime.data.SymbolHistory
+@@ -23,6 +21,7 @@ import com.osfans.trime.ime.window.BoardWindowManager
+ import com.osfans.trime.ime.window.ResidentWindow
+ import org.kodein.di.DI
+ import org.kodein.di.instance
++import splitties.dimensions.dp
+ 
+ class LiquidWindow(di: DI) :
+     BoardWindow.BarBoardWindow(di),
+@@ -62,15 +61,19 @@ class LiquidWindow(di: DI) :
+         }
+     }
+ 
++    // 网格：每格至少 single_width + 2*margin_x 宽，一行放得下几格就几列，剩余宽度平均分给每一格
+     private val mainLayoutManager by lazy {
+-        FlexboxLayoutManager(context).apply {
+-            flexDirection = FlexDirection.ROW
+-            flexWrap = FlexWrap.WRAP
+-        }
++        val cfg = scope.theme.liquidKeyboard
++        AutoSpanGridLayoutManager(context, context.dp(cfg.singleWidth) + 2 * context.dp(cfg.marginX.toInt()))
+     }
+ 
+     companion object : ResidentWindow.Key
+ 
++    // 和键盘页面之间的切换一致：不要从顶部滑入
++    override fun enterAnimation(lastWindow: BoardWindow): Transition? = null
++
++    override fun exitAnimation(nextWindow: BoardWindow): Transition? = null
++
+     override val key: ResidentWindow.Key
+         get() = LiquidWindow
+ 
 diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
 index 651dfd11..6491ecb9 100644
 --- a/gradle/libs.versions.toml
