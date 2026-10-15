@@ -6,42 +6,42 @@
 
 Trime 的 nightly 构建（arm64，v3.3.12-73）：
 
-- 内嵌 librime 1.17.0、librime-lua（Lua 5.4.6）、librime-octagram 和 librime-predict。它们全部静态链接在 `librime_jni.so` 里。
-- `librime_jni.so` 导出了 155 个 Lua 符号（`lua_*` / `luaL_*` / `luaopen_*`），我们的 `rime_llm.so` 需要的全部都在；并且导入了 `dlopen`/`dlsym`，说明内嵌的 Lua 开了 C 模块动态加载。
+- 内嵌 librime 1.17.0、librime-lua（Lua 5.4.6）、librime-octagram 和 librime-predict，均静态链接在 `librime_jni.so` 中。
+- `librime_jni.so` 导出 155 个 Lua 符号（`lua_*`、`luaL_*`、`luaopen_*`），`rime_llm.so` 所需符号全部在内。它同时导入了 `dlopen` 和 `dlsym`，说明内嵌的 Lua 启用了 C 模块的动态加载。
 - 用户数据目录：`/sdcard/Android/data/com.osfans.trime/files/rime`。
-- 已验证：数据目录挂载为 `noexec`，`.so` 不能放在那里加载。把它打进 APK 的原生库目录，用 `package.loadlib("librime_llm.so", ...)` 就能加载，这是后面方案的基础。
+- 该数据目录挂载为 `noexec`，`.so` 不能放在其中加载。将其打包进 APK 的原生库目录，再用 `package.loadlib("librime_llm.so", ...)` 即可加载，后面的方案以此为基础。
 
-推理核心在手机上能跑（`rime_llm.so` 用 NDK r27d 交叉编译，arm64，`+dotprod+i8mm+fp16`）：
+推理核心在手机上可运行（`rime_llm.so` 用 NDK r27d 交叉编译，arm64，`+dotprod+i8mm+fp16`）：
 
 | 项目 | 结果 |
 | --- | --- |
-| 正确性 | 10 条同音词用例首选 10/10，与 Mac 完全一致 |
-| 加载 | 约 0.7 秒（系统缓存热的时候） |
+| 正确性 | 10 条同音词用例首选 10/10，与 Mac 一致 |
+| 加载 | 约 0.7 秒（系统缓存已预热时） |
 | 内存 | 私有脏页约 362 MB，模型文件映射约 501 MB（可回收） |
 | 预解码之后只打分 | 约 6 ms（P95 6.6 ms） |
-| 预解码本身（上屏后后台跑） | 约 100~150 ms（4 线程） |
-| 同步全流程（现场解码上文再打分） | 约 63~130 ms，同一配置前后差一倍（手机调度和限频波动很大） |
+| 预解码本身（上屏后在后台运行） | 约 100~150 ms（4 线程） |
+| 同步全流程（现场解码上文再打分） | 约 63~130 ms，同一配置前后相差一倍（手机调度和限频波动大） |
 
 线程数与绑核（同步全流程，P50 / P95）：
 
 - 4 线程、不绑核最稳：约 64 / 90 ms。
-- 线程越多越糟：6 线程 93 / 225 ms，7 线程 113 / 334 ms，8 线程 241 / 1799 ms（最大 2.4 秒）。原因是 3 个 A510 小核加上 ggml 线程池的忙等待。
-- **线程数超过绑定的核数会直接卡死**（绑 4 个核开 5 个线程，跑了 8 分钟没结果）。
-- 绑大核比不绑核更慢。
-- 权重重排（`use_repack`）在手机上不值得：延迟没有改善（P50 85 ms），私有内存却多约 500 MB。保持关闭。
+- 线程越多越差：6 线程 93 / 225 ms，7 线程 113 / 334 ms，8 线程 241 / 1799 ms（最大 2.4 秒）。原因是 3 个 A510 小核，加上 ggml 线程池的忙等待。
+- **线程数超过绑定的核数会导致无响应**（绑定 4 个核、开 5 个线程，运行 8 分钟仍无结果）。
+- 绑定大核比不绑核更慢。
+- 权重重排（`use_repack`）在手机上收益为零：延迟没有改善（P50 85 ms），私有内存却多约 500 MB。保持关闭。
 
-## 第一档配置在 Trime 上已部署并编译成功
+## 第一档配置的部署
 
-用 `llm-android/deploy_trime.sh` 把本仓库的配置推到手机（`adb push` 到 `/sdcard/Android/data/com.osfans.trime/files/rime`），再通过 Trime 自带的广播 `com.osfans.trime.action.DEPLOY` 触发部署，不需要在手机上点界面：
+`llm-android/deploy_trime.sh` 通过 `adb push` 将本仓库的配置推送到手机的 `/sdcard/Android/data/com.osfans.trime/files/rime`，再用 Trime 自带的广播 `com.osfans.trime.action.DEPLOY` 触发部署，无需在手机上操作界面：
 
 ```bash
 llm-android/deploy_trime.sh --with-gram        # 首次：配置 + 语法模型（约 380 MB）
-llm-android/deploy_trime.sh                    # 之后改了配置：只推配置
+llm-android/deploy_trime.sh                    # 之后修改了配置：仅推送配置
 ```
 
-前提：Trime 已安装，并且走完首次启动引导，在第 1 步选“使用应用专属存储空间”。
+前提：Trime 已安装并完成首次引导，在第 1 步选择“使用应用专属存储空间”。
 
-手机上编译（骁龙 8 Gen 2，约 12~20 秒）出来的结果与 Mac 一致：
+手机端编译（骁龙 8 Gen 2，约 12~20 秒）的结果与 Mac 一致：
 
 | 检查项 | 手机 | Mac |
 | --- | --- | --- |
@@ -50,71 +50,78 @@ llm-android/deploy_trime.sh                    # 之后改了配置：只推配�
 | 过滤器、处理器顺序 | 一致 | |
 | librime 版本 | 1.17.0 | 1.16.0 |
 
-Trime 的 librime 1.17.0 比鼠须管的 1.16.0 新，所以 `translator/max_sentences`（长句候选数）可以在手机上启用。
+Trime 的 librime 1.17.0 比鼠须管的 1.16.0 新，因此 `translator/max_sentences`（长句候选数）可在手机端启用。
 
-## 已实现的方案：常驻推理进程 + 改版 Trime
+## 方案：常驻推理进程与改版 Trime
 
-Trime 的数据目录挂载为 `noexec`，Trime 也不可调试（`run-as` 被拒），所以 `rime_llm.so` 没法从外面放进去，必须进 APK。再加上稳定性方面的考虑，最后做成推理在独立进程、Trime 里只放一个薄客户端：
+Trime 的数据目录为 `noexec`，Trime 本身也不可调试（`run-as` 被拒），因此 `rime_llm.so` 无法从外部放入，只能打包进 APK。同时出于稳定性考虑，最终采用推理独立成进程、Trime 内仅保留轻量客户端的结构：
 
 ```
-Trime（改版 APK）                              rimellmd（shell 身份，adb / Shizuku 拉起）
-  Lua 脚本（和 Mac/PC 同一份）                    监督进程：看护工作进程，被杀/崩溃/无响应则退避重启，记录退出原因
-    └ librime_llm.so（客户端，140 KB）  ──socket──▶  工作进程：llama.cpp 引擎（与 Mac 同一份）+ 状态文件
-  工具栏 AI 徽标（状态/启停/Shizuku 启动）          127.0.0.1:17920，令牌认证
+Trime（改版 APK）                              rimellmd（shell 身份，由 adb 或 Shizuku 启动）
+  Lua 脚本（与 Mac、PC 为同一份）                 监督进程：看护工作进程，被终止、崩溃或无响应时退避重启并记录退出原因
+    └ librime_llm.so（客户端，140 KB）  ──socket──▶  工作进程：llama.cpp 引擎（与 Mac 为同一份）+ 状态文件
+  工具栏 AI 徽标（状态、启停、经 Shizuku 启动）      127.0.0.1:17920，令牌认证
 ```
 
-- 客户端（`daemon/rime_llm_client.cpp`）对 Lua 暴露的接口和 `rime_llm.so` 完全相同，所以 `ai_rerank_*.lua` 基本不用改。所有 I/O 都有时限。连不上时返回“不可用”，候选保持原顺序，输入不会变慢。它按指数退避重连。
-- 守护进程（`daemon/rimellmd.cpp`）内嵌一个私有 Lua 状态，直接调用 Mac 上测过的引擎，不重写推理。打分和轻量请求（心跳、touch、is_ready、prepare、配置）用两个 Lua 状态和两把锁，慢打分不会挡住它们。
-- 认证：每次启动生成随机令牌，写进 Trime 的应用专属目录（其他应用读不到）。守护进程只监听 127.0.0.1。Trime 需要 `INTERNET` 权限，改版 APK 已经加上。
-- 手动启停：点工具栏的 `● AI` 徽标，切换方案开关 `ai_rerank`。关闭时守护进程立刻卸载模型并拒绝推理，只剩几 MB 待命；开启时立刻加载。不会自动卸载。选择会被记住（`save_options`），新装默认关闭。长按徽标看详情。
-- 状态面板：守护进程每 5 秒写一次 `ai_status.json`（手动切换后的 15 秒内，每 0.3 秒一次），徽标读它。绿色是在线，黄色是加载或重启中，灰色是已关闭或待机，红色是离线。详情里有内存、打分延迟、跳过和错误次数、累计重启次数以及上次退出原因。
-- 自动拉起：徽标变红（离线）时，点一下就经 Shizuku 以 shell 身份启动守护进程，首次会弹出 Shizuku 的授权请求。键盘弹出时如果发现离线，每分钟最多自动尝试一次。重启手机后，要先启动 Shizuku。
-- 孤儿保护：Trime 被卸载后，它的数据目录会消失，没人能再关掉守护进程。守护进程发现这个目录连续 10 分钟不在（`--orphan-sec` 可改），就自己退出，监督进程看到退出码 77 后也结束，不再重启。重装 Trime 后，点红色的徽标即可重新拉起。孤儿保护用一个临时目录和另一个端口测过，目录删除 15 秒后两个进程都退出了。
-- 熄屏联动：Trime 在亮屏或熄屏时设置 Rime 选项 `screen_off`，Lua 转给守护进程。默认没有单独的熄屏时限，只保留了这个接口。
+- 客户端（`daemon/rime_llm_client.cpp`）向 Lua 暴露的接口与 `rime_llm.so` 完全相同，因此 `ai_rerank_*.lua` 基本无需改动。所有 I/O 均有时限，无法连接时返回“不可用”，候选保持原顺序，输入不受影响。客户端按指数退避重连。
+- 守护进程（`daemon/rimellmd.cpp`）内嵌一个私有 Lua 状态，直接调用 Mac 端已测试的引擎，不重写推理。打分与轻量请求（心跳、touch、is_ready、prepare、配置）使用两个 Lua 状态和两把锁，慢打分不会阻塞后者。
+- 认证：每次启动生成随机令牌，写入 Trime 的应用专属目录（其他应用不可读）。守护进程仅监听 127.0.0.1。Trime 需要 `INTERNET` 权限，改版 APK 已加入。
+- 手动启停：点按工具栏的 `● AI` 徽标，切换方案开关 `ai_rerank`。关闭时守护进程立即卸载模型并拒绝推理，仅保留数 MB 的待命进程；开启时立即加载。不自动卸载。选择会被保留（`save_options`），新安装默认关闭。长按徽标可查看详情。
+- 状态面板：守护进程每 5 秒写一次 `ai_status.json`（手动切换后的 15 秒内，每 0.3 秒写一次），徽标读取该文件。绿色为在线，黄色为加载或重启中，灰色为已关闭或待机，红色为离线。详情包含内存、打分延迟、跳过和错误次数、累计重启次数以及上次退出原因。
+- 自动启动：徽标为红色（离线）时，点按即可经 Shizuku 以 shell 身份启动守护进程，首次会弹出 Shizuku 的授权请求。键盘弹出时若发现离线，每分钟最多自动尝试一次。手机重启后，须先启动 Shizuku。
+- 孤儿保护：Trime 被卸载后，其数据目录随之消失，无法再通过它关闭守护进程。守护进程检测到该目录连续 10 分钟不存在（可用 `--orphan-sec` 调整）时自行退出，监督进程收到退出码 77 后同样结束，不再重启。重新安装 Trime 后，点按红色徽标即可再次启动。已用临时目录和另一个端口验证：目录删除 15 秒后，两个进程均退出。
+- 熄屏联动：Trime 在亮屏或熄屏时设置 Rime 选项 `screen_off`，由 Lua 转交给守护进程。默认不设单独的熄屏时限，仅保留该接口。
 
-### 手机上的调优结论（实测，Zenfone 10 / 骁龙 8 Gen 2，空闲时、每次换一组新候选）
+### 手机端调优结论
 
-- 这个模型有按顺序处理的循环层，打分约 100 ms 的下限与线程数基本无关（1、2、3 线程都是约 133 ms）。4 线程会因预解码和打分同时忙等，偶发数秒卡顿，2~3 线程没有，所以默认用 2 线程。
-- 候选数是最有效的旋钮：5 个候选 p50≈118 ms，3 个≈78 ms，2 个≈61 ms。手机上用 3 个。
-- 四字词的第二阶段要现场解码，每次 100~500 ms，所以在手机上关闭。Mac 和 PC 不受影响。
-- 引擎默认按 128 上下文 / 12 并发序列预留，手机上收紧到 96 / 6：堆内存 374→234 MB，延迟不变。RSS 里另有约 512 MB 是模型文件映射页（干净页，可被内核随时回收）。
-- 上文 token 10→6，缩短上屏后的后台预解码。
+测试条件：Zenfone 10（骁龙 8 Gen 2），手机空闲，每次更换一组新候选。
 
-这些手机专属设置不改仓库里的 Mac/PC 配置，而是放在 `trime/*.overlay.yaml`，部署时追加到暂存的 `*.custom.yaml`（`deploy_trime.sh`）。
+- 该模型含按顺序处理的循环层，打分约 100 ms 的下限与线程数基本无关（1、2、3 线程均约 133 ms）。4 线程会因预解码与打分同时忙等而出现偶发的数秒卡顿，2~3 线程没有，因此默认使用 2 线程。
+- 候选数影响最大：5 个候选 P50 约 118 ms，3 个约 78 ms，2 个约 61 ms。手机端使用 3 个。
+- 四字词的第二阶段需要现场解码，每次 100~500 ms，因此在手机端关闭，Mac 和 PC 不受影响。
+- 引擎默认按 128 上下文、12 并发序列预留，手机端收紧为 96 和 6：堆内存由 374 MB 降至 234 MB，延迟不变。RSS 中另有约 512 MB 为模型文件映射页（干净页，内核可随时回收）。
+- 上文 token 数由 10 降为 6，缩短上屏后的后台预解码。
+
+这些手机端专属设置不改动仓库中 Mac、PC 使用的配置，而是写在 `trime/*.overlay.yaml` 中，由 `deploy_trime.sh` 在部署时追加到暂存的 `*.custom.yaml`。
 
 ### 文件
 
 | 路径 | 作用 |
 | --- | --- |
-| `daemon/rimellmd.cpp` | 守护进程（监督 + 工作） |
-| `daemon/rime_llm_client.cpp` | Trime 里的客户端库（`librime_llm.so`） |
+| `daemon/rimellmd.cpp` | 守护进程（监督进程与工作进程） |
+| `daemon/rime_llm_client.cpp` | Trime 内的客户端库（`librime_llm.so`） |
 | `daemon/proto.h` | 线路协议（带总时限的帧读写） |
-| `daemon/rimellmctl.sh` | 电脑端 `deploy / start / stop / restart / status / log` |
-| `daemon/test_daemon.py` | 端到端测试：认证、非法输入、正确性、并发；`--chaos` 再做 `kill -9` 和 `SIGSTOP` 恢复测试 |
-| `daemon/bench_daemon.py` | 真实打分延迟基准（每次换新候选） |
-| `trime/patches/0001-ai-rerank-daemon.patch` | 对 Trime `ad5a14be` 的改动：`INTERNET`、亮灭屏接收器、AI 徽标、Shizuku 启动 |
-| `trime/build_apk.sh` | 从源码到签名 APK 的完整流程；`trime/sign_apk.sh` 只做对齐和签名 |
-| `trime/*.overlay.yaml`、`trime/trime.custom.yaml` | 手机专属配置叠加、键盘高度补丁 |
+| `daemon/rimellmctl.sh` | 电脑端的 `deploy`、`start`、`stop`、`restart`、`status`、`log` |
+| `daemon/test_daemon.py` | 端到端测试：认证、非法输入、正确性、并发；加 `--chaos` 还会做 `kill -9` 和 `SIGSTOP` 的恢复测试 |
+| `daemon/bench_daemon.py` | 真实打分延迟基准（每次更换新候选） |
+| `trime/patches/0001-ai-rerank-daemon.patch` | 对 Trime `ad5a14be` 的改动：`INTERNET` 权限、亮灭屏接收器、AI 徽标、Shizuku 启动、流式键盘布局 |
+| `trime/build_apk.sh` | 从源码到签名 APK 的完整流程；`trime/sign_apk.sh` 仅负责对齐和签名 |
+| `trime/*.overlay.yaml` | 手机端专属配置，部署时追加到对应的 `*.custom.yaml` |
+| `trime/gen_tongwenfeng_patch.py` | 生成 `trime/tongwenfeng.trime.custom.yaml`（GBoard 风格布局补丁），不要手工编辑生成结果 |
+| `trime/trime.custom.yaml` | `trime` 主题的键盘高度补丁 |
+| `docs/preview.png` | README 使用的 Android 预览图 |
 | `deploy_trime.sh` | 推送配置并触发部署 |
 
-覆盖安装改版 APK 之后，输入法服务要等键盘弹出才会起来，部署广播只有服务在运行时才会被接收。所以装完要先点开一个输入框，再部署。
+覆盖安装改版 APK 之后，输入法服务须等到键盘弹出才会启动，而部署广播只有在服务运行时才会被接收。因此装完后应先打开任意输入框，再部署。
 
-**换签名密钥必须先卸载原来的 Trime**，这会清空它的数据目录，先备份用户词库。
+**更换签名密钥须先卸载原有的 Trime。** 卸载会清空其数据目录，应事先备份用户词库。
 
 ## 构建与测试
 
-需要 Android NDK r27d（`27.3.13750724`）。
+整套产物（改版 APK、客户端库、守护进程）由 `trime/build_apk.sh` 一次完成。前提：JDK 17、Android NDK r27d（`27.3.13750724`）、CMake 3.31.6，以及 `../../rime-llm-mac-port/` 中的 llama.cpp 与转换后的 `rime_llm_mac.cpp`（见 [llm-mac/README.md](../llm-mac/README.md)）。
+
+单独编译守护进程和客户端：
 
 ```bash
-# 交叉编译 rime_llm.so（llama.cpp 与转换后的 rime_llm_mac.cpp 在 ../../rime-llm-mac-port/，见 llm-mac/README.md）
 cmake -G Ninja -S llm-android -B build_android \
   -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static
-cmake --build build_android --target rime_llm
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 \
+  -DRIME_LLM_HOST_LIB=<librime_jni.so>
+cmake --build build_android --target rimellmd rime_llm_client
 ```
 
-对接 Trime 时，把 `-DRIME_LLM_HOST_LIB=<librime_jni.so>` 传给 CMake，让加载器把 `lua_*` 解析到它。
+`RIME_LLM_HOST_LIB` 指向 Trime 的 `librime_jni.so`，使加载器把客户端中的 `lua_*` 符号解析到它。`rime_llm` 目标是进程内版本的引擎，在手机端不再使用，保留用于对照测试。
 
-`bench_android.lua`、`sweep.sh`、`prep_bench.sh` 是手机上的基准脚本（用 `adb push` 到 `/data/local/tmp`，由 `adb shell` 运行）；`elfsyms.py` 是没有 `nm` 时读 ELF 动态符号表的小工具。
+`bench_android.lua`、`sweep.sh`、`prep_bench.sh` 是手机端的基准脚本，经 `adb push` 放到 `/data/local/tmp` 后由 `adb shell` 运行。`elfsyms.py` 用于在没有 `nm` 时读取 ELF 动态符号表。
 
-注意：不要让线程数超过绑定的核数，也不要在手机上开太多线程。
+线程数不得超过绑定的核数，手机端也不宜开过多线程。
