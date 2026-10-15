@@ -121,7 +121,7 @@ text = "\n".join(out)
 assert "mparams.use_mmap = 1;" in text
 # llama.cpp b11632 起 use_mmap 字段改为 load_mode 枚举
 text = text.replace("mparams.use_mmap = 1;",
-                    "mparams.load_mode = LLAMA_LOAD_MODE_MMAP;\n        mparams.n_gpu_layers = 0;  // CPU 推理（与上游一致）\n        mparams.use_extra_bufts = false;  // 关闭权重重排：权重直接用文件映射，不再复制成私有内存（省约 500 MB）")
+                    "mparams.load_mode = LLAMA_LOAD_MODE_MMAP;\n        mparams.n_gpu_layers = RIME_LLM_GPU_LAYERS;  // 0 = CPU 推理（默认，与上游一致）；cmake -DRIME_LLM_METAL=ON 时为 99\n        mparams.use_extra_bufts = false;  // 关闭权重重排：权重直接用文件映射，不再复制成私有内存（省约 500 MB）")
 
 # ---- 不阻塞输入：打分不在主线程上等锁，上文没预解码好时可选择直接跳过 ----
 def patch(old, new):
@@ -130,6 +130,12 @@ def patch(old, new):
     text = text.replace(old, new)
 
 # 跳过标志（仅主线程读写）
+patch("#include <cstdio>\n",
+      "#include <cstdio>\n\n"
+      "#ifndef RIME_LLM_GPU_LAYERS\n"
+      "#define RIME_LLM_GPU_LAYERS 0   // 0 = CPU；cmake -DRIME_LLM_METAL=ON 时由构建系统定义为 99\n"
+      "#endif\n")
+
 patch("static int g_score_log_cnt = 0;",
       "static int g_score_log_cnt = 0;\n"
       "static bool g_score_skipped = false;       // 本次 score 被跳过（锁被占用 / 上文未预解码）\n"
@@ -158,6 +164,27 @@ patch("    std::vector<double> scores;\n    try {\n        score_batch(ctx_ids, 
       "    try {\n        score_batch(ctx_ids, cand_ids, scores);")
 patch("    // 按分数降序排列\n",
       "    if (g_score_skipped) { lua_pushnil(L); lua_pushstring(L, g_score_skip_reason); return 2; }\n\n    // 按分数降序排列\n")
+
+
+# ---- 退出时释放模型与上下文（Metal 后端的设备对象在静态析构时断言缓冲已释放，否则进程退出时 abort）----
+patch("static void load_model_async() {",
+      "static void unload_model();   // 前向声明\n"
+      "static std::atomic<bool> g_atexit_registered{false};\n"
+      "// 进程退出时先于 ggml 的静态析构释放模型：atexit 要在模型加载之后（设备对象构造之后）注册，\n"
+      "// 后注册的先执行。否则 ggml_metal_device_free 的断言会让进程在退出时 abort。\n"
+      "static void cleanup_at_exit() {\n"
+      "    unload_model();\n"
+      "    llama_backend_free();\n"
+      "}\n"
+      "static int lua_gc_module(lua_State *) { cleanup_at_exit(); return 0; }\n\n"
+      "static void load_model_async() {")
+patch("        g_loaded.store(true);\n        g_loading.store(false);\n        log_msg(\"model ready",
+      "        if (!g_atexit_registered.exchange(true)) std::atexit(cleanup_at_exit);\n"
+      "        g_loaded.store(true);\n        g_loading.store(false);\n        log_msg(\"model ready")
+patch("    lua_pushcfunction(L, lua_newindex);\n    lua_setfield(L, -2, \"__newindex\");",
+      "    lua_pushcfunction(L, lua_newindex);\n    lua_setfield(L, -2, \"__newindex\");\n"
+      "    lua_pushcfunction(L, lua_gc_module);   // 模块卸载 / Lua 状态关闭时释放模型\n"
+      "    lua_setfield(L, -2, \"__gc\");")
 
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")

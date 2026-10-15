@@ -53,6 +53,25 @@ llama.cpp 默认会把权重重排成更适合 CPU 的布局，模型因此不�
 
 `port_to_mac.py` 默认生成「重排关」的版本。想要更快、不在乎内存，去掉那行 `mparams.use_extra_bufts = false;` 重新编译即可。
 
+## 可选：Metal GPU 推理（实验）
+
+默认是 CPU 推理。Apple Silicon 上可以改用 Metal，构建时加 `-DRIME_LLM_METAL=ON`（着色器库内嵌进 `.so`，不依赖外部文件）：
+
+```bash
+cmake -G Ninja -S . -B build_metal -DRIME_LLM_METAL=ON && cmake --build build_metal --target rime_llm
+```
+
+实测（M1 Pro，Qwen3.5-0.8B Q4_K_M，同样的 300 次打分，结果一致，首选 10/10）：
+
+| | CPU（默认） | Metal |
+| --- | --- | --- |
+| 单次打分 | 约 27 ms | **约 13 ms** |
+| 300 次打分的 CPU 时间 | 30.2 秒 | **0.9 秒** |
+| 内存占用 | 372 MB | 417 MB |
+| 首次加载 | 约 1 秒 | 约 9 秒（系统第一次编译着色器），之后约 1 秒（有缓存） |
+
+注意：llama.cpp 的 Metal 设备对象会在进程退出的静态析构里断言「所有缓冲都已释放」。如果退出时模型还没释放，进程会 abort，也就是**每次输入法退出都会产生一次崩溃报告**。所以 `rime_llm.so` 在模块卸载（`__gc`）和进程退出（`atexit`，在模型加载之后注册，保证先于 ggml 的静态析构）时都会释放模型。
+
 ## Lua 层（`lua/ai_rerank_filter.lua`、`lua/ai_rerank_processor.lua`）
 
 移植自上游的 `llm_filter.lua` / `llm_processor.lua`，并带上了为全拼做的适配（按覆盖长度分组、四字两阶段）。融合打分逻辑保持不变，其余改动：
