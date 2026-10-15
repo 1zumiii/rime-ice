@@ -3,7 +3,7 @@
 <p align="center"><a href="README.md">简体中文</a> · English</p>
 
 <p align="center">
-  A personal custom fork of <a href="https://github.com/iDvel/rime-ice">rime-ice</a> (雾凇拼音): recent-first ranking, local-LLM candidate reranking, a grammar model, fuzzy pinyin, plus configs for Squirrel (macOS) and Weasel (Windows).<br>
+  A personal custom fork of <a href="https://github.com/iDvel/rime-ice">rime-ice</a> (雾凇拼音): recent-first ranking, local-LLM candidate reranking, a grammar model, fuzzy pinyin, plus configs for Squirrel (macOS), Weasel (Windows) and Trime (Android).<br>
   The original upstream README is kept as <a href="README.upstream.md">README.upstream.md</a> (Chinese).
 </p>
 
@@ -11,7 +11,7 @@
 
 ## About
 
-This fork is based on [iDvel/rime-ice](https://github.com/iDvel/rime-ice) at `da1fbe6` (2026-10-05). I use and test it mainly on macOS with Squirrel 1.1.2 (librime 1.16). A Windows (Weasel) setup is included but has seen much less verification.
+This fork is based on [iDvel/rime-ice](https://github.com/iDvel/rime-ice) at `da1fbe6` (2026-10-05). I use and test it mainly on macOS with Squirrel 1.1.2 (librime 1.16). A Windows (Weasel) setup is included but has seen much less verification. On Android I use it daily on one phone (ASUS Zenfone 10) with Trime; see below.
 
 - The default branch is `custom`. It only merges updates from upstream; nothing is pushed or proposed back. `main` mirrors upstream and exists only for syncing.
 - **Every personal change lives in its own file** (`*.custom.yaml` patches and standalone Lua scripts). Upstream schemas, dictionaries and Lua files are not edited, so merging upstream rarely conflicts.
@@ -26,7 +26,7 @@ Words committed in the last 72 hours are promoted to the 2nd candidate position 
 - Records go to `~/Library/Rime/recent_words.tsv`, **a plain-text log of the words you commit** (up to 3000 entries). It is neither synced nor committed to the repo.
 - Rime's own userdb frequency learning still applies; this sits on top of it.
 
-### AI reranking (experimental, macOS Apple Silicon only)
+### AI reranking (experimental, macOS Apple Silicon; Android in the next section)
 
 A small local model (Qwen3.5-0.8B, Q4_K_M) reorders candidates using **what you just committed in the current input session**. After committing "我最近没有太多", typing `jingli` ranks "精力" first instead of "经理"; for four-character input such as `jingliguolai`, a two-stage pass composes "经理过来".
 
@@ -43,6 +43,17 @@ A small local model (Qwen3.5-0.8B, Q4_K_M) reorders candidates using **what you 
 - **Limits**: validated on only a dozen homophone cases, so it says little about real-world accuracy. It only reorders candidates Rime already produced; it cannot create new ones.
 
 You need to build `rime_llm.so` yourself (Xcode, CMake) and download a ~508 MB model; see [llm-mac/README.md](llm-mac/README.md).
+
+### Android (Trime)
+
+The same config and the AI reranker are ported to the phone. Inference runs in a separate resident process and Trime only holds a thin client, so the input method being killed or crashing does not take the model down with it. Design, measurements and the file list are in [llm-android/README.md](llm-android/README.md) (Chinese).
+
+- **Patched Trime.** One patch on a pinned upstream commit ([patch](llm-android/trime/patches/0001-ai-rerank-daemon.patch)): an `INTERNET` permission (only used for 127.0.0.1), screen on/off notifications, an `● AI` status badge in the toolbar, and starting the daemon through Shizuku. You must build and sign it yourself (`llm-android/trime/build_apk.sh`); no APK is in the repo.
+- **Resident process `rimellmd`.** A standalone binary started by adb or Shizuku as the shell user. A supervisor watches the worker and restarts it with back-off if it is killed, crashes or stops responding, recording the reason. Traffic is 127.0.0.1 plus a random token, every I/O call has a deadline, and if the daemon is unreachable the keystroke just isn't reranked, so typing is never slowed. The engine is the same one tested on the Mac.
+- **Manual on/off.** Tap the `● AI` badge to switch AI on or off (green = online, yellow = loading or restarting, grey = off, red = offline, tap to start it through Shizuku); long-press for memory, latency, restart count and the last exit reason. Turning it off unloads the model at once and leaves only an idle process; turning it on loads at once. **No automatic unloading**, **off by default on a fresh install**, and the choice is remembered.
+- **Phone tuning** (measured on a Snapdragon 8 Gen 2): 2 inference threads (4 caused occasional multi-second stalls from busy-waiting), 3 candidates (about a third faster than 5), 6 context tokens, and the two-stage live decoding switched off. These live only in `llm-android/trime/*.overlay.yaml` and are appended at deploy time, so macOS and Windows are unaffected.
+- **GBoard-style layout.** The Tongwenfeng theme is rearranged to GBoard's main page, `?123` number/symbol page and a symbol page of 4 rows × 7 columns, with line icons, and the space bar shows 拼音 in Chinese mode and English in English mode. The patch is generated from the theme source by [gen_tongwenfeng_patch.py](llm-android/trime/gen_tongwenfeng_patch.py).
+- **Verified on one phone only**; other devices and Trime versions are untested. After a reboot Shizuku has to be started before the daemon can be launched.
 
 ### Grammar model
 
@@ -76,7 +87,11 @@ The script also has an "adjacent-key typo tolerance" generator, **off by default
 5. **Squirrel keeps switch state per input field**, so a switch you want always on must default to on.
 6. **Never cache an engine-bound object as a module-level Lua variable.** Squirrel gives every input field/app its own engine while Lua modules are shared; a `Component.Translator(...)` stored at module level ends up used after its engine was destroyed, and `query` dereferences a dangling pointer (crash report: `ScriptTranslator::Query`). Keep it in `env`, which dies with the engine.
 7. **With Metal, free the model before the process exits.** llama.cpp's Metal device object asserts in a static destructor that every buffer is released; otherwise the process aborts and Squirrel leaves a crash report on every quit.
-8. **Upstream's `.gitignore` ignores `*.custom.yaml`**; this fork whitelists the ones in the root and in `windows/`.
+8. **Upstream's `.gitignore` ignores `*.custom.yaml`**; this fork whitelists the ones in the root, in `windows/` and in `llm-android/trime/`.
+9. **Trime is not debuggable and its data directory is `noexec`**, so a `.so` cannot be dropped in from outside; it has to go inside the APK. Changing the signing key means uninstalling the old Trime first (which wipes its data directory, so back it up).
+10. **Don't use 4 inference threads on the phone.** Pre-decoding and scoring run at the same time and ggml's thread pool busy-waits; on big.LITTLE cores shared with other apps that gives occasional multi-second stalls. 2–3 threads don't, and latency is about the same (the model has sequential recurrent layers, so the latency floor does not depend on thread count).
+11. **A Trime theme patch must be named `<theme id>.custom.yaml`** (`tongwenfeng.trime.custom.yaml` for Tongwenfeng), and Trime only reads the theme when the input-method service starts, so restart Trime after changing it. A key's own `label` only applies in Chinese mode; in English mode the preset label is shown, so icons must be changed in `preset_keys`.
+12. **After reinstalling Trime over itself, the input-method service doesn't start until the keyboard is shown**, and a deploy broadcast sent before that is dropped. Open a text field first, then deploy.
 
 ## Build and install
 
@@ -95,6 +110,19 @@ The AI-rerank binary and model are installed separately with `llm-mac/install_ll
 ### Windows (Weasel)
 
 `windows/` contains `install.ps1` (backs up, then installs, keeping your own `default.custom.yaml` and user data), `check_deployed.ps1` (verifies after deployment that the official spelling rules survived the patches), and a `rime_ice.custom.yaml` without the features that could clash with AI reranking. The scripts have been run on a real Windows machine and fixed (robocopy hanging on locked files, an invisible `-DryRun` listing, overwriting your own `weasel.yaml` style), but coverage is still limited; use `-DryRun` first. **After installing, click "Redeploy" in the tray icon**: `WeaselDeployer.exe /deploy` on a command line does not actually compile the schemas. The script does not copy `weasel.yaml`, so your own Weasel style is kept; put style overrides in `weasel.custom.yaml`. On Windows the AI reranker is the upstream plugin built from source with some local patches that are not in this repo; it is not the macOS port in `llm-mac/`.
+
+### Android (Trime)
+
+Prerequisites: the patched Trime is installed and its first-run setup is done (choose "use app-specific storage"), the phone is connected over adb, and Shizuku is installed.
+
+```bash
+llm-android/trime/build_apk.sh                       # build and sign the patched APK from source (needs JDK 17, NDK r27d, etc.; see the top of the script)
+adb install -r <the generated apk>
+llm-android/deploy_trime.sh --with-gram              # push the config and grammar model; show Trime's keyboard first or the deploy won't take effect
+llm-android/daemon/rimellmctl.sh start               # start the daemon from the computer (or tap the red AI badge on the phone to start it through Shizuku)
+```
+
+Put the model `Qwen3.5-0.8B-Q4_K_M.gguf` in Trime's user directory (`/sdcard/Android/data/com.osfans.trime/files/rime/`). Full notes, tests and benchmark scripts are in [llm-android/README.md](llm-android/README.md) (Chinese).
 
 ## Syncing with upstream
 
@@ -115,10 +143,11 @@ git checkout custom && git merge main
 | `lua/model_badge_filter.lua` | `❖` marker for sentence candidates |
 | `llm-mac/` | macOS port of the AI reranker: conversion script, build config, installer, tests |
 | `windows/` | Weasel setup |
+| `llm-android/` | Android (Trime): resident inference process, Trime patch and build scripts, phone-only config overlays, GBoard-style layout patch, benchmarks and tests |
 | `install.sh`, `tools/verify_build.sh` | Installer and pre-install self-check |
 
 ## Credits and licence
 
-Thanks to [iDvel/rime-ice](https://github.com/iDvel/rime-ice) and its contributors; [zhanghaozhecn/rime-llm-rerank](https://github.com/zhanghaozhecn/rime-llm-rerank) (AI reranking; attribution licence, free for personal use); [amzxyz/RIME-LMDG](https://github.com/amzxyz/RIME-LMDG) (Wanxiang grammar model); [llama.cpp](https://github.com/ggml-org/llama.cpp); and the authors of Rime, librime-lua and librime-octagram.
+Thanks to [iDvel/rime-ice](https://github.com/iDvel/rime-ice) and its contributors; [zhanghaozhecn/rime-llm-rerank](https://github.com/zhanghaozhecn/rime-llm-rerank) (AI reranking; attribution licence, free for personal use); [amzxyz/RIME-LMDG](https://github.com/amzxyz/RIME-LMDG) (Wanxiang grammar model); [llama.cpp](https://github.com/ggml-org/llama.cpp); [osfans/trime](https://github.com/osfans/trime) (the Trime input method, GPL-3.0) and the Tongwenfeng theme author 暖暖; [Shizuku](https://github.com/RikkaApps/Shizuku); and the authors of Rime, librime-lua and librime-octagram.
 
 This repository keeps upstream's GPL-3.0 licence, see [LICENSE](LICENSE). The model and grammar-model files follow their publishers' licences.

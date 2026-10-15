@@ -3,7 +3,7 @@
 <p align="center">简体中文 · <a href="README.en.md">English</a></p>
 
 <p align="center">
-  基于 <a href="https://github.com/iDvel/rime-ice">雾凇拼音（rime-ice）</a> 的个人定制版本：最近使用优先、本地小模型 AI 重排、语法模型、模糊音，以及配套的鼠须管（macOS）和小狼毫（Windows）配置。<br>
+  基于 <a href="https://github.com/iDvel/rime-ice">雾凇拼音（rime-ice）</a> 的个人定制版本：最近使用优先、本地小模型 AI 重排、语法模型、模糊音，以及配套的鼠须管（macOS）、小狼毫（Windows）和同文输入法 Trime（Android）配置。<br>
   上游原版的说明保留在 <a href="README.upstream.md">README.upstream.md</a>。
 </p>
 
@@ -11,7 +11,7 @@
 
 ## 项目说明
 
-这个 fork 基于 [iDvel/rime-ice](https://github.com/iDvel/rime-ice) 的 `da1fbe6`（2026-10-05）。我在日常使用中加了一些自己需要的功能，主要在 macOS 的鼠须管（Squirrel 1.1.2，librime 1.16）上使用和测试；Windows 小狼毫有一套配置，但验证较少。
+这个 fork 基于 [iDvel/rime-ice](https://github.com/iDvel/rime-ice) 的 `da1fbe6`（2026-10-05）。我在日常使用中加了一些自己需要的功能，主要在 macOS 的鼠须管（Squirrel 1.1.2，librime 1.16）上使用和测试；Windows 小狼毫有一套配置，但验证较少；Android 的同文输入法 Trime 在一台手机（ASUS Zenfone 10）上日常使用，见下文。
 
 - 默认分支为 `custom`，只从上游合并更新，不向上游推送或提交 PR。`main` 与上游保持一致，仅用来同步。
 - **所有个人改动都放在单独的文件里**（`*.custom.yaml` 补丁、独立的 Lua 脚本），没有直接修改上游的方案、词库和 Lua，所以合并上游更新时基本不会冲突。
@@ -26,7 +26,7 @@
 - 记录保存在 `~/Library/Rime/recent_words.tsv`，**是你上屏词的明文记录**（默认最多保留 3000 条），不会同步到别处，也不会进仓库。
 - 原版的词频学习（userdb）仍然保留，这个功能是在它之上的补充。
 
-### AI 重排（实验，仅 macOS Apple Silicon）
+### AI 重排（实验，macOS Apple Silicon；Android 见下一节）
 
 用本地小模型（Qwen3.5-0.8B，Q4_K_M 量化）根据**本次输入会话里刚上屏的内容**，对候选词重新排序。例如上屏"我最近没有太多"之后输入 `jingli`，首选会变成"精力"，而不是"经理"；输入 `jingliguolai` 时，用两阶段重排拼出"经理过来"。
 
@@ -43,6 +43,17 @@
 - **效果的局限**：我只用十几条同音词用例验证过，不能代表真实输入的准确率。它只重排 Rime 已经生成的候选，不能产生新候选。
 
 需要自己编译 `rime_llm.so`（Xcode、CMake）并下载约 508 MB 的模型，步骤见 [llm-mac/README.md](llm-mac/README.md)。
+
+### Android（同文输入法 Trime）
+
+把同一套配置和 AI 重排移植到了手机上。推理放在独立的常驻进程里，Trime 里只留一个薄客户端，所以输入法进程被杀或崩溃不会连带丢掉模型。详细设计、实测数据和文件清单见 [llm-android/README.md](llm-android/README.md)。
+
+- **改版 Trime**：基于上游固定提交打了一个补丁（[补丁](llm-android/trime/patches/0001-ai-rerank-daemon.patch)）：加 `INTERNET` 权限（只连本机 127.0.0.1）、亮灭屏通知、工具栏的 `● AI` 状态徽标、经 Shizuku 拉起守护进程。必须自己编译并用自己的密钥签名（`llm-android/trime/build_apk.sh`），仓库里不带 APK。
+- **常驻推理进程 `rimellmd`**：独立二进制，由 adb 或 Shizuku 以 shell 身份拉起；监督进程看护工作进程，被杀、崩溃、无响应都会带退避自动重启并记下原因。通信走 127.0.0.1 加随机令牌，所有 I/O 都有时限，连不上就只是这次不重排，输入不会被拖慢。推理引擎就是 Mac 上测过的那一份。
+- **手动启停**：点工具栏的 `● AI` 徽标开关 AI（绿 = 在线，黄 = 加载或重启中，灰 = 已关闭，红 = 离线，点一下经 Shizuku 启动），长按看内存、延迟、重启次数和上次退出原因。关闭时模型立即卸载，进程只剩待命；开启时立即加载。**不自动卸载**，**新装默认关闭**，选择会被记住。
+- **手机上的调优**（实测，骁龙 8 Gen 2）：2 个推理线程（4 个会因忙等偶发数秒卡顿）、3 个候选（比 5 个快约三分之一）、上文 6 个 token、关闭四字两阶段的现场解码。这些只写在 `llm-android/trime/*.overlay.yaml` 里，部署时才追加，不影响 Mac 和 Windows。
+- **GBoard 风格布局**：同文风主题改成 GBoard 习惯的主页面、`?123` 数字符号页和每页 4 行 × 7 列的符号页，线条图标，空格键在中文模式显示「拼音」、英文模式显示「English」。补丁由 [gen_tongwenfeng_patch.py](llm-android/trime/gen_tongwenfeng_patch.py) 从主题源文件生成。
+- **只在这一台手机上验证过**，其他机型、其他 Trime 版本未测。重启手机后需要先启动 Shizuku，守护进程才能被拉起。
 
 ### 语法模型
 
@@ -78,7 +89,11 @@
 5. **鼠须管的开关状态是每个输入框各管各的**，新输入框会回到默认状态，所以需要常开的开关默认值要设成开。
 6. **不要把绑定了引擎的对象缓存成 Lua 模块级变量。** 鼠须管每个输入框/应用都有独立的引擎，而 Lua 模块是共享的；把 `Component.Translator(...)` 存成模块级变量，后来的输入框会用到已销毁引擎里的翻译器，`query` 时访问野指针，进程直接段错误（崩溃报告里是 `ScriptTranslator::Query`）。要存就存在 `env` 里，随引擎一起销毁。
 7. **用 Metal 的话，退出时必须先释放模型。** llama.cpp 的 Metal 设备对象在进程退出的静态析构里断言缓冲已全部释放，没释放就 abort，输入法每次退出都会留一份崩溃报告。
-8. **官方 `.gitignore` 会忽略 `*.custom.yaml`**，这个 fork 已放行根目录和 `windows/` 下的。
+8. **官方 `.gitignore` 会忽略 `*.custom.yaml`**，这个 fork 已放行根目录、`windows/` 和 `llm-android/trime/` 下的。
+9. **Trime 不可调试，数据目录又是 `noexec`**，`.so` 无法从外面放进去，只能打进 APK；换签名必须先卸载原来的 Trime（会清空它的数据目录，先备份）。
+10. **手机上推理线程别开到 4 个。** 预解码和打分同时跑，ggml 的线程池忙等，在大小核加上其他应用争核的环境里会偶发数秒卡顿；2~3 个线程没有这个问题，延迟也几乎一样（这个模型有按顺序处理的循环层，延迟下限与线程数无关）。
+11. **Trime 的主题补丁文件名必须是 `<主题 id>.custom.yaml`**（同文风是 `tongwenfeng.trime.custom.yaml`），而且 Trime 只在输入法服务启动时读主题，改完要重启一次 Trime。按键自己写的 `label` 只在中文模式生效，英文模式显示预设标签，所以图标要改在 `preset_keys` 里。
+12. **覆盖安装 Trime 后，输入法服务要等键盘弹出才会起来**，在那之前发出的部署广播会被丢掉：先点开一个输入框再部署。
 
 ## 编译与安装
 
@@ -97,6 +112,19 @@ AI 重排的二进制和模型另外安装：`llm-mac/install_llm.sh`，步骤�
 ### Windows（小狼毫）
 
 `windows/` 下有一套适配：`install.ps1`（先备份再安装，保留你的 `default.custom.yaml` 和用户数据）、`check_deployed.ps1`（部署后检查官方拼写规则有没有被补丁覆盖）、以及去掉了和 AI 重排可能冲突的功能的 `rime_ice.custom.yaml`。脚本在真实 Windows 上跑过并修过几个问题（`robocopy` 遇到被占用的文件会卡死、预览看不到文件列表、会覆盖自己的 `weasel.yaml` 样式），但覆盖面仍有限，请先用 `-DryRun` 预览。**安装后要点托盘图标的「重新部署」**，命令行的 `WeaselDeployer.exe /deploy` 不会真正编译方案。脚本不会拷贝 `weasel.yaml`，所以你自己的小狼毫样式会保留，样式覆盖请写在 `weasel.custom.yaml`。 AI 重排在 Windows 上用的是自行从源码编译的上游插件（带一些本地补丁，补丁不在本仓库里），不是这里的 macOS 移植。
+
+### Android（Trime）
+
+前提：已装好改版 Trime 并走完首次引导（选「使用应用专属存储空间」），手机用 adb 连着，并装有 Shizuku。
+
+```bash
+llm-android/trime/build_apk.sh                       # 从源码编改版 APK 并签名（首次需要 JDK 17、NDK r27d 等，见脚本开头）
+adb install -r <生成的 apk>
+llm-android/deploy_trime.sh --with-gram              # 推送配置和语法模型；先让 Trime 键盘弹出来，部署才会生效
+llm-android/daemon/rimellmctl.sh start               # 电脑端启动守护进程（也可以在手机上点红色的 AI 徽标，经 Shizuku 启动）
+```
+
+模型文件 `Qwen3.5-0.8B-Q4_K_M.gguf` 需要放进 Trime 的用户目录（`/sdcard/Android/data/com.osfans.trime/files/rime/`）。完整说明、测试和基准脚本见 [llm-android/README.md](llm-android/README.md)。
 
 ## 同步上游更新
 
@@ -117,10 +145,11 @@ git checkout custom && git merge main
 | `lua/model_badge_filter.lua` | 整句候选的 `❖` 标记 |
 | `llm-mac/` | AI 重排的 macOS 移植：转换脚本、构建配置、安装脚本、测试 |
 | `windows/` | 小狼毫适配 |
+| `llm-android/` | Android（Trime）：常驻推理进程、Trime 补丁与构建脚本、手机专属配置叠加、GBoard 风格布局补丁、基准与测试 |
 | `install.sh`、`tools/verify_build.sh` | 安装与安装前自检 |
 
 ## 致谢与许可
 
-感谢 [iDvel/rime-ice](https://github.com/iDvel/rime-ice) 及其贡献者；[zhanghaozhecn/rime-llm-rerank](https://github.com/zhanghaozhecn/rime-llm-rerank)（AI 重排，署名许可，个人使用无限制）；[amzxyz/RIME-LMDG](https://github.com/amzxyz/RIME-LMDG)（万象语法模型）；[llama.cpp](https://github.com/ggml-org/llama.cpp)；以及 Rime、librime-lua、librime-octagram 的作者们。
+感谢 [iDvel/rime-ice](https://github.com/iDvel/rime-ice) 及其贡献者；[zhanghaozhecn/rime-llm-rerank](https://github.com/zhanghaozhecn/rime-llm-rerank)（AI 重排，署名许可，个人使用无限制）；[amzxyz/RIME-LMDG](https://github.com/amzxyz/RIME-LMDG)（万象语法模型）；[llama.cpp](https://github.com/ggml-org/llama.cpp)；[osfans/trime](https://github.com/osfans/trime)（同文输入法，GPL-3.0）及同文风主题作者暖暖；[Shizuku](https://github.com/RikkaApps/Shizuku)；以及 Rime、librime-lua、librime-octagram 的作者们。
 
 本仓库沿用上游的 GPL-3.0 许可证，见 [LICENSE](LICENSE)。模型文件和语法模型各自遵循其发布方的许可。
