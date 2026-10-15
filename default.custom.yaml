@@ -1,0 +1,18 @@
+# 个人通用补丁
+
+patch:
+  # 旧配置里去掉了 emoji：emoji 开关每次都回到方案默认状态（rime_ice 里 reset: 1）
+  switcher/save_options:
+    - ascii_punct
+    - traditionalization
+    - full_shape
+    - search_single_char
+
+  # 每页候选个数（Rime 不支持根据内容动态调整，只能固定；7 个时短词容易顶到第二行，所以用 5）
+  menu/page_size: 5
+
+
+  # 只保留在用的方案。其余的（九宫格、各种双拼）从方案菜单里隐藏，文件仍在，需要时把对应行加回来即可。
+  # 方案文件（*.schema.yaml）都还在，没有删除。t9（九宫格）依赖 rime_ice，不用九宫格可以不管。
+  schema_list:
+    - schema: rime_ice

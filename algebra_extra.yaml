@@ -1,0 +1,13 @@
+# encoding: utf-8
+# 由 tools/gen_typo_rules.py 生成，不要手改。
+# 追加到 speller/algebra 的额外规则：模糊音；邻键误触容错默认关闭（见生成脚本的 ENABLE_NEIGHBOUR_TYPO）
+---
+rules:
+  - derive/^([zcs])h/$1/
+  - derive/^([zcs])([^h])/$1h$2/
+  - derive/ang$/an/
+  - derive/an$/ang/
+  - derive/eng$/en/
+  - derive/en$/eng/
+  - derive/ing$/in/
+  - derive/in$/ing/

@@ -1,0 +1,49 @@
+# 个人雾凇拼音补丁。用 .custom.yaml 而不是直接改官方文件，同步上游时不会冲突。
+
+patch:
+  # 模糊音 + 邻键误触容错：规则由 tools/gen_typo_rules.py 生成到 algebra_extra.yaml，追加到官方拼写规则之后
+  # 注意：不能用 __patch 引用带 /+ 的补丁，那样会整体替换官方规则（缩写会失效）
+  "speller/algebra/+":
+    __include: algebra_extra:/rules
+
+  # ---------- 1. 最近使用优先（lua/recent_boost_filter.lua） ----------
+  # 插在 pin_cand_filter 之前（第 4 位），置顶词仍然在最前面
+  "engine/filters/@before 4": lua_filter@*recent_boost_filter
+  recent_boost_filter:
+    window_hours: 72   # 多少小时内用过算「最近」
+    idx: 2             # 提升到第几个候选位置（1 = 最前面）
+    max_boost: 2       # 最多提升几个词
+    scan: 40           # 只在前 N 个候选里找
+    min_count: 1       # 窗口内至少用过几次才提升
+    max_records: 3000  # 记录文件最多保留多少条使用记录
+
+  # ---------- 2. 冷词降频 / 删词（lua/cold_word_drop，已随官方提供） ----------
+  # Control+j 降频到第 4 位，Control+x 隐藏，Control+d 强制删词
+  "engine/processors/@after 0": lua_processor@*cold_word_drop.processor
+  "engine/filters/@before last": lua_filter@*cold_word_drop.filter
+
+  # ---------- 3. 英文、自定义短语也随使用调整 ----------
+  melt_eng/enable_user_dict: true      # 英文词随使用调频
+  custom_phrase/db_class: tabledb      # custom_phrase.txt 可动态调频（会回写该文件）
+
+  # ---------- 4. 语法模型（需要先下载 wanxiang-lts-zh-hans.gram，见 README.md） ----------
+  # 模型文件不存在时 librime 会忽略这几项，不影响输入
+  grammar:
+    language: wanxiang-lts-zh-hans
+    collocation_max_length: 5
+    collocation_min_length: 2
+  translator/contextual_suggestions: true
+  translator/max_homophones: 7
+  translator/max_homographs: 7
+
+  # ---------- 5. 语法模型标记（lua/model_badge_filter.lua） ----------
+  # 整句组出来的候选后面加 ❖；放在 cn_en_spacer 之后，保证在 corrector 之后
+  "engine/filters/@before 7": lua_filter@*model_badge_filter
+  model_badge_filter:
+    badge: "❖"
+    gram: wanxiang-lts-zh-hans.gram
+
+  # ---------- 6. 中英混输词条自动空格（lua/cn_en_spacer.lua） ----------
+  # 「VIP中P」→「VIP 中 P」。插在 pin_cand_filter 之后；
+  # 补丁键按字典序依次生效，下标依赖上面 @before 4 的插入，改动过滤器列表时要一起检查。
+  "engine/filters/@before 6": lua_filter@*cn_en_spacer

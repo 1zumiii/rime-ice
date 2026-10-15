@@ -21,3 +21,8 @@ cn_dicts/temp.txt
 rime_console
 rime_deployer
 rime_patch
+# 个人补丁需要纳入版本管理
+!/*.custom.yaml
+!/windows/*.custom.yaml
+
+luac.out

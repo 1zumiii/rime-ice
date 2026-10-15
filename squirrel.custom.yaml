@@ -1,0 +1,28 @@
+# 个人 Squirrel 外观补丁（升级官方配置时不会冲突）
+# 来源：迁移自旧版 ~/Library/Rime/squirrel.yaml 的手改部分
+
+patch:
+  style/color_scheme: wechat
+  style/color_scheme_dark: wechat
+  style/candidate_list_layout: linear
+  style/spacing: 15
+  style/font_face: "OpenSans-Regular"
+
+  preset_color_schemes/wechat:
+    name: '微信键盘 / WeChat-keyboard' # 配色取自微信键盘
+    author: zsakvo
+    back_color: 0xFFFFFF
+    border_height: 0
+    border_width: 8
+    candidate_format: '%c %@ '
+    comment_text_color: 0x999999
+    corner_radius: 5
+    hilited_corner_radius: 5
+    font_face: PingFangSC
+    font_point: 17
+    hilited_candidate_back_color: 0x75B100
+    hilited_candidate_text_color: 0xFFFFFF
+    horizontal: true
+    inline_preedit: true
+    label_font_point: 12
+    text_color: 0x424242
