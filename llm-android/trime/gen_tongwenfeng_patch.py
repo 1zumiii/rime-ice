@@ -133,6 +133,18 @@ _bqrw1 = pk["bqrw1"]["keys"]
 _idx = [i for i, k in enumerate(_bqrw1) if k.get("click") == "\u263a"]
 assert len(_idx) == 1, _idx
 patch[f"preset_keyboards/bqrw1/keys/@{_idx[0]}/click"] = "\u263a\ufe0f"
+# ---- 流式键盘（长按 😊 / 工具栏表情按钮进入的页面）：行列和尺寸向符号页看齐 ----
+# 网格是自动换行的：列数 = (屏宽 - 2*margin_x) / (single_width + 2*margin_x)。屏宽约 393dp，margin_x 4、single_width 46 → 正好 7 列。
+patch["liquid_keyboard/single_width"] = 46
+patch["liquid_keyboard/margin_x"] = 4
+patch["liquid_keyboard/row"] = 4
+patch["liquid_keyboard/row_land"] = 3
+patch["liquid_keyboard/key_height"] = 36
+patch["liquid_keyboard/key_height_land"] = 34
+patch["liquid_keyboard/vertical_gap"] = 5
+# 底部固定按键条把预设按键的 label 当纯文本显示，不认 ic@ 图标，所以给它单独一个文字标签的退格
+patch["preset_keys/BackSpace3"] = {"label": "退格", "repeatable": True, "functional": False, "send": "BackSpace"}
+patch["liquid_keyboard/fixed_key_bar/keys"] = ["liquid_keyboard_exit", "space1", "BackSpace3", "Return2", "clipboard_window", "liquid_keyboard_tabs"]
 patch["preset_keyboards/default/keys"] = letters()
 patch["preset_keyboards/number"] = {"author": "GBoard 风格", "name": "数字符号页", "width": 10, "ascii_mode": 1, "keys": number_page()}
 patch["preset_keyboards/numpad"] = {"author": "暖暖", "name": "数字+", "width": 16.6, "ascii_mode": 1, "keys": numpad()}

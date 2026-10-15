@@ -582,6 +582,54 @@ index 0b9b4ac8..48acf9c0 100644
          RimeDaemon.destroySession(javaClass.name)
      }
  
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
+index 0dc1341e..f4d14ffa 100644
+--- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidItemUi.kt
+@@ -25,6 +25,8 @@ import splitties.views.setPaddingDp
+ class LiquidItemUi(
+     override val ctx: Context,
+     private val scope: ThemeScope,
++    // 底部固定按键条的文字比格子里的符号小一些，上下栏不显得挤
++    textScale: Float = 1f,
+ ) : Ui {
+     private val theme: Theme get() = scope.theme
+ 
+@@ -32,7 +34,7 @@ class LiquidItemUi(
+         isClickable = false
+         isFocusable = false
+         background = null
+-        textSize = theme.style.keyTextSize
++        textSize = theme.style.keyTextSize * textScale
+         typeface = theme.fonts.key
+         setPaddingDp(8, 4, 8, 4)
+         setTextColor(scope.colors.keyTextColor)
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
+index 3b509ae8..7eac65b3 100644
+--- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidLayout.kt
+@@ -59,7 +59,7 @@ class LiquidLayout(
+                     Array(fixedKeys.size) { index ->
+                         val presetKeyName = fixedKeys[index]
+                         val presetKey = theme.presetKeys[presetKeyName]
+-                        val ui = LiquidItemUi(context, scope)
++                        val ui = LiquidItemUi(context, scope, textScale = 0.7f)
+                         fixedKeyItems += ui
+                         ui.mainText.text = presetKey?.label ?: ""
+                         ui.root.apply {
+diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt
+index 8e2d5de8..1f4d6f62 100644
+--- a/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt
++++ b/app/src/main/java/com/osfans/trime/ime/symbol/LiquidTabsUi.kt
+@@ -39,7 +39,7 @@ class LiquidTabsUi(
+ 
+         val text =
+             textView {
+-                textSize = theme.style.candidateTextSize
++                textSize = theme.style.candidateTextSize * 0.85f
+                 typeface = theme.fonts.candidate
+                 setTextColor(scope.colors.candidateTextColor)
+             }
 diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
 index 651dfd11..6491ecb9 100644
 --- a/gradle/libs.versions.toml
