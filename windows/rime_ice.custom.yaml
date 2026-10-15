@@ -1,0 +1,47 @@
+# Windows(小狼毫) 专用的雾凇拼音补丁。安装时会覆盖用户目录里的 rime_ice.custom.yaml。
+# 与根目录(Mac)版的区别：
+#   - 去掉 recent_boost_filter（它也在调顺序，和 LLM 重排叠加会打架，先不开）
+#   - 去掉 model_badge_filter（LLM 插件自己有 AI· 标记，且两者会争用 @after last）
+#   - cn_en_spacer 的下标因此要改成 @before 5
+#   - cold_word_drop 的 processor 改用 @after 0，把 @before 0 留给 LLM 的 processor
+# 注意：补丁键按字典序依次生效，改过滤器/处理器列表时要一起检查下标。
+
+patch:
+  # 模糊音（平翘舌、前后鼻音）。邻键纠错默认关闭，见 tools/gen_typo_rules.py
+  # 不能用 __patch 引用带 /+ 的补丁文件，那样会整体替换官方拼写规则（简拼会失效）
+  "speller/algebra/+":
+    __include: algebra_extra:/rules
+
+  # 冷词降频/屏蔽：Control+j 降频，Control+x 隐藏，Control+d 强制删词
+  # LLM 只能重排不能删候选，所以这个是互补的
+  "engine/processors/@after 0": lua_processor@*cold_word_drop.processor
+  "engine/filters/@before last": lua_filter@*cold_word_drop.filter
+
+  # 中英混输词条自动空格，插在 pin_cand_filter 之后（这里 pin 是第 4 位，所以 @before 5）
+  "engine/filters/@before 5": lua_filter@*cn_en_spacer
+
+  # 英文、自定义短语也随使用调频
+  melt_eng/enable_user_dict: true
+  custom_phrase/db_class: tabledb
+
+  # 语法模型（需要把 wanxiang-lts-zh-hans.gram 放进用户目录，且 rime.dll 要带 octagram 插件，见 README.md）
+  grammar:
+    language: wanxiang-lts-zh-hans
+    collocation_max_length: 5
+    collocation_min_length: 2
+  translator/contextual_suggestions: true
+  translator/max_homophones: 7
+  translator/max_homographs: 7
+
+  # ---------- LLM 重排（rime-llm-rerank）：按你 llm_quanpin 方案里已验证的写法填，默认注释掉 ----------
+  # LLM 的 processor 要放在 processors 最前，filter 要放在 filters 最后（uniquifier 之后）
+  # "engine/processors/@before 0": lua_processor@*llm_processor
+  # "engine/filters/@after last": lua_filter@*llm_filter
+  # llm_rerank:
+  #   enabled: true
+  #   code_pattern: '.+'
+  #   expected_length_weight: 0
+  #   cpu_cores: 7
+  #   max_candidates: 5
+  #   persist_freq: false
+  #   model_path: 'C:\Users\Orion\rime-llm-review\models\Qwen3.5-0.8B-Q4_K_M.gguf'
