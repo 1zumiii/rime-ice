@@ -81,7 +81,7 @@
 | 英文、自定义短语调频 | `melt_eng` 打开用户词典，`custom_phrase` 改为 `tabledb`（Rime 会回写 `custom_phrase.txt`） |
 | 中英混输自动空格 | 启用上游自带的 `cn_en_spacer`，`VIP中P` → `VIP 中 P` |
 | 每页候选 5 个 | 7 个时短词容易顶到第二行 |
-| 方案列表 | 只保留 `rime_ice`，其余方案文件仍在，需要时在 `default.custom.yaml` 的 `schema_list` 里加回 |
+| 方案列表 | 只保留 `rime_ice`（全拼）。九宫格和各种双拼的方案文件已从本仓库删除，需要时从上游拿回，再在 `default.custom.yaml` 的 `schema_list` 里加上 |
 | 外观 | `squirrel.custom.yaml`：微信键盘配色、横排候选、OpenSans 字体 |
 
 ## 踩过的坑
@@ -150,6 +150,13 @@ llm-android/daemon/rimellmctl.sh start               # 电脑端启动守护进�
 git fetch upstream
 git checkout main && git merge --ff-only upstream/main && git push origin main
 git checkout custom && git merge main
+```
+
+我们删掉了用不到的双拼和九宫格方案（`double_pinyin*.schema.yaml`、`t9.schema.yaml`）。上游改到这些文件时，合并会报“上游改了、我们删了”的冲突，直接丢掉它们：
+
+```bash
+git rm double_pinyin*.schema.yaml t9.schema.yaml
+git commit
 ```
 
 ## 自定义内容的位置

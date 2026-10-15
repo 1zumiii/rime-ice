@@ -12,7 +12,7 @@ patch:
   menu/page_size: 5
 
 
-  # 只保留在用的方案。其余的（九宫格、各种双拼）从方案菜单里隐藏，文件仍在，需要时把对应行加回来即可。
-  # 方案文件（*.schema.yaml）都还在，没有删除。t9（九宫格）依赖 rime_ice，不用九宫格可以不管。
+  # 只保留在用的方案（全拼 rime_ice）。九宫格和各种双拼的方案文件已从本仓库删除，
+  # 需要时从上游（iDvel/rime-ice）拿回对应的 *.schema.yaml，再把方案加回这里。
   schema_list:
     - schema: rime_ice
