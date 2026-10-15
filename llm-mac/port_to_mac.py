@@ -122,5 +122,42 @@ assert "mparams.use_mmap = 1;" in text
 # llama.cpp b11632 起 use_mmap 字段改为 load_mode 枚举
 text = text.replace("mparams.use_mmap = 1;",
                     "mparams.load_mode = LLAMA_LOAD_MODE_MMAP;\n        mparams.n_gpu_layers = 0;  // CPU 推理（与上游一致）\n        mparams.use_extra_bufts = false;  // 关闭权重重排：权重直接用文件映射，不再复制成私有内存（省约 500 MB）")
+
+# ---- 不阻塞输入：打分不在主线程上等锁，上文没预解码好时可选择直接跳过 ----
+def patch(old, new):
+    global text
+    assert text.count(old) == 1, f"patch anchor not unique/found: {old[:60]!r}"
+    text = text.replace(old, new)
+
+# 跳过标志（仅主线程读写）
+patch("static int g_score_log_cnt = 0;",
+      "static int g_score_log_cnt = 0;\n"
+      "static bool g_score_skipped = false;       // 本次 score 被跳过（锁被占用 / 上文未预解码）\n"
+      "static bool g_score_require_prep = false;  // 本次 score 要求上文已预解码，否则跳过\n"
+      "static const char * g_score_skip_reason = \"\";  // 跳过原因：busy（后台预解码持锁）| unprepared（上文未预解码）")
+
+# 1) 后台预解码持锁时不等待，直接放弃本次重排（候选保持原顺序）
+patch("    std::lock_guard<std::mutex> lock(g_mutex);\n"
+      "    auto t1 = std::chrono::high_resolution_clock::now();",
+      "    // 不在主线程上等锁：后台预解码持锁时直接放弃本次重排，避免输入卡顿\n"
+      "    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);\n"
+      "    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason = \"busy\"; return; }\n"
+      "    auto t1 = std::chrono::high_resolution_clock::now();")
+
+# 2) 要求预解码就绪时，没命中就不现场解码上文（约 40~55 ms），直接跳过
+patch("    bool use_prep = g_prep_ready && ctx_ids == g_prep_ctx && g_seq0_gen == g_prep_gen;",
+      "    bool use_prep = g_prep_ready && ctx_ids == g_prep_ctx && g_seq0_gen == g_prep_gen;\n"
+      "    if (!use_prep && g_score_require_prep) { g_score_skipped = true; g_score_skip_reason = \"unprepared\"; return; }")
+
+# 3) lua_score：可选第 3 个参数 allow_sync（false = 上文没预解码好就返回 nil），被跳过时返回 nil
+patch("    std::vector<double> scores;\n    try {\n        score_batch(ctx_ids, cand_ids, scores);",
+      "    std::vector<double> scores;\n"
+      "    // 第 3 个参数 allow_sync（默认 true）：false 时，上文没有预解码好就不现场解码，直接返回 nil\n"
+      "    g_score_require_prep = (lua_gettop(L) >= 3 && lua_isboolean(L, 3) && !lua_toboolean(L, 3));\n"
+      "    g_score_skipped = false;\n"
+      "    try {\n        score_batch(ctx_ids, cand_ids, scores);")
+patch("    // 按分数降序排列\n",
+      "    if (g_score_skipped) { lua_pushnil(L); lua_pushstring(L, g_score_skip_reason); return 2; }\n\n    // 按分数降序排列\n")
+
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")

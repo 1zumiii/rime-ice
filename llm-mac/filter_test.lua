@@ -63,8 +63,11 @@ os.execute("mkdir -p '" .. ud .. "/lua'")
 local filter = require("ai_rerank_filter")
 local processor = require("ai_rerank_processor")
 
+local settle = true
 local function press(env, repr)
-  return processor({ release = function() return false end, repr = function() return repr end }, env)
+  local r = processor({ release = function() return false end, repr = function() return repr end }, env)
+  if settle then os.execute("sleep 0.45") end   -- 等后台预解码完成
+  return r
 end
 
 -- 提交历史 → processor 同步 → 上文
@@ -152,6 +155,62 @@ do
   local tail_ok = true
   for i = 4, 12 do if texts[i] ~= "词" .. i then tail_ok = false end end
   check("E. candidates after scan_limit keep order", tail_ok, table.concat(texts, ","))
+end
+
+
+-- I: 预解码没就绪时不卡、不阻塞：这次保持原顺序，补触发预解码，稍后再重排
+do
+  hist = { "我最近没有太多" }
+  settle = false
+  press(mk_env("", hist, true), "i1")          -- 上文变了，后台预解码刚开始
+  _G.llm_filter_cache = nil
+  local cands = { mk("经理", 0, 6), mk("经历", 0, 6), mk("精力", 0, 6), mk("敬礼", 0, 6), mk("警力", 0, 6) }
+  local t0 = os.clock()
+  local texts = run(mk_env("jingli", hist, true), cands)
+  local dt = (os.clock() - t0) * 1000
+  check("I. not prepared yet: order kept (no blocking decode)", table.concat(texts, ",") == "经理,经历,精力,敬礼,警力", table.concat(texts, ","))
+  check("I. skipped call returns fast (<15 ms CPU)", dt < 15, string.format("%.1f ms", dt))
+  settle = true
+  os.execute("sleep 0.6")                      -- 等后台预解码结束
+  texts = run(mk_env("jingli", hist, true), cands)   -- 若刚才撞车导致预解码被放弃，这一次会补触发预解码
+  os.execute("sleep 0.6")
+  texts = run(mk_env("jingli", hist, true), cands)   -- 再按一次键：必然已恢复
+  check("I. self-heals within a keystroke: reranked", texts[1] == "精力", table.concat(texts, ","))
+end
+
+-- J: 第一阶段按「上文+候选」缓存：输入第二个词的每个字母不重新推理
+do
+  hist = { "他在公司当" }
+  press(mk_env("", hist, true), "j1")
+  _G.llm_filter_cache = nil
+  _G.ai_rerank_state = nil
+  tail_cands["guolai"] = { mk("过来", 0, 6), mk("果来", 0, 6), mk("国来", 0, 6) }
+  tail_cands["guola"] = { mk("过拉", 0, 5), mk("国拉", 0, 5) }
+  tail_cands["guo"] = { mk("过", 0, 3), mk("国", 0, 3) }
+  local first = { mk("经理", 0, 6), mk("经历", 0, 6), mk("精力", 0, 6), mk("敬礼", 0, 6) }
+  local function with_sentence(inp, n) local t = { mk("经历过来", 0, n, "sentence") }; for _, c in ipairs(first) do t[#t + 1] = c end; return t end
+  local n0 = _G.llm_infer_n or 0
+  local texts, ys = run(mk_env("jingliguolai", hist, true), with_sentence("jingliguolai", 12))
+  local n1 = _G.llm_infer_n or 0
+  check("J. full four-char input: two-stage ran (◈ first)", ys[1].comment == "◈" and texts[1] == "经理过来", table.concat(texts, ","))
+  check("J. first call used stage1 + stage2 inference (2)", n1 - n0 == 2, tostring(n1 - n0))
+
+  -- 退格一位：输入变短 → 跳过第二阶段；第一阶段候选没变 → 命中缓存，不再推理
+  local n2 = _G.llm_infer_n or 0
+  texts, ys = run(mk_env("jingliguola", hist, true), with_sentence("jingliguola", 11))
+  check("J. backspace: no two-stage candidate", ys[1].comment ~= "◈" and texts[1] ~= "经理过拉", table.concat(texts, ","))
+  check("J. backspace: no new inference (stage1 cache hit)", (_G.llm_infer_n or 0) == n2, tostring((_G.llm_infer_n or 0) - n2))
+  -- 同一个输入串被再次调用（翻页等）：仍然保持"改字中"
+  texts, ys = run(mk_env("jingliguola", hist, true), with_sentence("jingliguola", 11))
+  check("J. same shrunk input again: still skipped", ys[1].comment ~= "◈", table.concat(texts, ","))
+  -- 再往后打（变长）：恢复第二阶段
+  texts, ys = run(mk_env("jingliguolai", hist, true), with_sentence("jingliguolai", 12))
+  check("J. typing forward again: two-stage resumes", ys[1].comment == "◈", table.concat(texts, ","))
+
+  -- 剩余拼音太短（"guo" 只有 3 个字母 < 4）不跑第二阶段
+  _G.ai_rerank_state = nil
+  texts, ys = run(mk_env("jingliguo", hist, true), with_sentence("jingliguo", 9))
+  check("J. short rest (<4 letters): no two-stage", ys[1].comment ~= "◈", table.concat(texts, ","))
 end
 
 -- F: 单字母输入不触发（默认 code_pattern [a-z]{3,}）

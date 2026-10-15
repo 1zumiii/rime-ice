@@ -135,6 +135,9 @@ local function processor(key, env)
 
     if not llm_prep then load_llm(env) end
 
+    -- 输入已清空（上屏/取消）：退格检测的状态归零
+    if ctx.input == "" then _G.ai_rerank_state = nil end
+
     -- 上文变化 → 立即异步预解码
     trigger_prepare()
 
@@ -174,6 +177,9 @@ local function processor(key, env)
         end
         prev_hist = {}
         for _, v in ipairs(history) do table.insert(prev_hist, v) end
+        -- 上文刚更新：立刻异步预解码，让它在两次按键之间的空档里完成。
+        -- （按键开头的那次预解码用的还是旧上文——新上文要到这里才同步进来。）
+        trigger_prepare()
     end
 
     return 2

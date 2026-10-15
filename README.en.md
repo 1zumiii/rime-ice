@@ -35,6 +35,7 @@ A small local model (Qwen3.5-0.8B, Q4_K_M) reorders candidates using **what you 
 - **Switch**: on by default, per input field (Squirrel gives every field its own session). `Control+Shift+5` toggles it for the current field. To turn it off by default, set `reset: 0` on the `ai_rerank` switch in `rime_ice.custom.yaml`.
 - **Context comes only from Rime's `commit_history`**, i.e. text committed through the IME in this session. It never reads text from any app, so the first word after switching fields is not reranked.
 - **Privacy**: no file containing your input is written and there is no network access. Upstream's training log, event log and frequency persistence were removed.
+- **It never blocks typing for a rerank**: scoring does not wait for the background pre-decode; if the context is not pre-decoded yet, that keystroke keeps Rime's order and the next one is reranked. While you backspace (input gets shorter) the expensive second stage is skipped, and the first stage is cached by "context + candidates", so typing the letters of one word does not re-run inference.
 - By default it only triggers for inputs of 3+ letters (`code_pattern: [a-z]{3,}`), leaving pinned words and abbreviations alone, and only looks at the first 80 candidates; the rest stay lazily generated so rime-ice's large dictionary doesn't stall.
 - **Cost** (Apple Silicon, CPU inference, 4 threads): ~1 s model load, ~27 ms per scoring call, ~394 MB resident in Squirrel. llama.cpp's weight repacking is disabled (`use_extra_bufts = false`), which cut memory from 869 MB to 374 MB at the price of ~7 ms per call.
 - **Limits**: validated on only a dozen homophone cases, so it says little about real-world accuracy. It only reorders candidates Rime already produced; it cannot create new ones.
@@ -71,7 +72,8 @@ The script also has an "adjacent-key typo tolerance" generator, **off by default
 3. **Patch keys apply in lexical order**, so numeric `@before N` depends on earlier insertions, and each key can appear only once, so slots like `@before 0` and `@after last` can serve one component each.
 4. **Replace an existing `rime_llm.so` by deleting it first.** Overwriting in place makes macOS's cached code signature disagree with the new content; the kernel then kills Squirrel at load (`SIGKILL (Code Signature Invalid)`), and after repeated crashes the system drops it from the enabled input sources. `llm-mac/install_llm.sh` does this correctly.
 5. **Squirrel keeps switch state per input field**, so a switch you want always on must default to on.
-6. **Upstream's `.gitignore` ignores `*.custom.yaml`**; this fork whitelists the ones in the root and in `windows/`.
+6. **Never cache an engine-bound object as a module-level Lua variable.** Squirrel gives every input field/app its own engine while Lua modules are shared; a `Component.Translator(...)` stored at module level ends up used after its engine was destroyed, and `query` dereferences a dangling pointer (crash report: `ScriptTranslator::Query`). Keep it in `env`, which dies with the engine.
+7. **Upstream's `.gitignore` ignores `*.custom.yaml`**; this fork whitelists the ones in the root and in `windows/`.
 
 ## Build and install
 

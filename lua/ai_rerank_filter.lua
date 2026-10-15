@@ -12,6 +12,9 @@
 --   expected_length_weight  预期词长加成，全拼设 0（默认 0）
 --   freq_beta               词频融合系数，默认 1.5
 --   scan_limit              只在前 N 个候选里重排，其余惰性透传，默认 80
+--   stage2                  四字两阶段总开关，默认 true
+--   stage2_context_chars    第二阶段只用最后 N 个字作为上文，默认 8（现场解码，越短越快）
+--   stage2_min_rest         剩余拼音至少 N 个字母才跑第二阶段，默认 4
 --   badge / badge2          首选候选的注释标记：重排后的首选 / 两阶段拼出来的首选，默认 ◇ / ◈（单字符，省空间；❖ 仍表示语法模型整句）
 --   model_path / cpu_cores  见 ai_rerank_processor
 
@@ -21,6 +24,9 @@ local cfg = {
     expected_length_weight = 0,
     freq_beta = 1.5,
     scan_limit = 80,
+    stage2 = true,              -- 四字两阶段总开关；怀疑它有问题时设为 false
+    stage2_context_chars = 8,   -- 第二阶段只用「上文+第一阶段选中词」的最后 N 个字，解码更快
+    stage2_min_rest = 4,        -- 剩余拼音至少 N 个字母才跑第二阶段（输入过程中的半截拼音不值得推理）
     badge = "◇",       -- AI 按上文重排后的首选
     badge2 = "◈",      -- 两阶段拼出来的首选（四字 = 两个两字词）
     debug_latency = false,
@@ -61,6 +67,12 @@ local function init_config(env)
     if v then cfg.max_candidates = v end
     v = sc:get_int("llm_rerank/scan_limit")
     if v then cfg.scan_limit = v end
+    local s2on = sc:get_bool("llm_rerank/stage2")
+    if s2on ~= nil then cfg.stage2 = s2on end
+    v = sc:get_int("llm_rerank/stage2_context_chars")
+    if v then cfg.stage2_context_chars = v end
+    v = sc:get_int("llm_rerank/stage2_min_rest")
+    if v then cfg.stage2_min_rest = v end
     local b = sc:get_string("llm_rerank/badge")
     if b ~= nil then cfg.badge = b end
     b = sc:get_string("llm_rerank/badge2")
@@ -112,22 +124,35 @@ local function dbg(msg)
     end
 end
 
+-- 调试标志（仅数字/原因码，不含文字）：由 inner 填写，wrapper 在 debug_latency 时写入 llm_latency.txt
+local flags = {}
+
+-- 取字符串最后 n 个 UTF-8 字符
+local function tail_chars(str, n)
+    local len = utf8.len(str)
+    if not len or len <= n then return str end
+    return str:sub(utf8.offset(str, len - n + 1))
+end
+
 -- === 第二阶段 ===
 -- 用 ScriptTranslator 查剩余拼音的候选，以"上文 + 第一阶段选中词"为上文打分，返回最优词。
 -- 只有 Component.Translator(engine, "", "script_translator@translator") 的 query 能返回候选。
 -- 候选文字不做繁简转换（雾凇词库本身是简体）。
-local s2_tr = nil
-local function s2_init(env)
-    if not s2_tr then
+-- 翻译器必须按引擎各自持有（存在 env 里，随引擎销毁）。鼠须管每个输入框/应用都有独立的引擎，
+-- 而 Lua 模块是共享的：缓存成模块级变量会让后来的输入框用上已被销毁的引擎里的翻译器，
+-- 之后 query 会访问野指针，直接段错误（崩溃报告：ScriptTranslator::Query）。
+local function s2_translator(env)
+    if not env.ai_s2_tr then
         pcall(function()
-            s2_tr = Component.Translator(env.engine, "", "script_translator@translator")
+            env.ai_s2_tr = Component.Translator(env.engine, "", "script_translator@translator")
         end)
     end
+    return env.ai_s2_tr
 end
 
 -- 返回 w2, cands2；失败返回 nil
 local function second_stage(env, llm, context, w1, rest)
-    s2_init(env)
+    local s2_tr = s2_translator(env)
     if not s2_tr or not llm or rest == "" then return nil end
     local okseg, seg = pcall(function() return env.engine.context.composition:back() end)
     if not okseg or not seg then return nil end
@@ -153,7 +178,7 @@ local function second_stage(env, llm, context, w1, rest)
     if not okq or #cands2 == 0 then return nil end
     if #cands2 == 1 then return cands2[1], cands2 end
     _G.llm_infer_n = (_G.llm_infer_n or 0) + 1
-    local ok2, result = pcall(function() return llm.score(context .. w1, cands2) end)
+    local ok2, result = pcall(function() return llm.score(tail_chars(context .. w1, cfg.stage2_context_chars), cands2) end)
     if not ok2 or type(result) ~= "table" or not result[1] then return cands2[1], cands2 end
     local okg, scores = pcall(function() return llm.get_scores() end)
     local best = result[1]
@@ -182,6 +207,22 @@ local function inner(translation, env)
     if #all < 2 then dbg("skip: <2 candidates"); for _, c in ipairs(all) do Y(c) end; return end
 
     local input = env.engine.context.input or ""
+    -- 输入串变短 = 用户在退格改字：跳过第二阶段（它要现场解码，约 100 ms），改完再往后打时恢复。
+    -- 同一个输入串被过滤器多次调用时保持"改字中"的判断；输入清空时由 processor 重置。
+    local st = _G.ai_rerank_state
+    if not st then st = { last = "", skip = nil }; _G.ai_rerank_state = st end
+    local shrinking
+    if st.skip == input then
+        shrinking = true
+    elseif #st.last > 0 and #input < #st.last then
+        st.skip = input
+        shrinking = true
+    else
+        st.skip = nil
+        shrinking = false
+    end
+    st.last = input
+    flags.shr = shrinking and "1" or "0"
     local llm = _G.ai_rerank_llm   -- 由 ai_rerank_processor 加载
     if not llm then
         dbg("skip: llm module not loaded (_G.ai_rerank_llm is nil)")
@@ -284,17 +325,28 @@ local function inner(translation, env)
         table.insert(cands, c.text)
     end
 
-    -- 缓存命中：同 (上文, 输入) 的评分直接复用
+    -- 第一阶段缓存：按「上文 + 候选列表」缓存，而不是按输入串。输入第二个词的每个字母时，
+    -- 第一阶段的候选其实没变，不需要重新推理。
+    local key1 = context .. "\1" .. table.concat(cands, "\2")
     local cache = _G.llm_filter_cache
     local ok, result, scores
-    if cache and cache.ctx == context and cache.input == input and cache.result then
+    if cache and cache.key == key1 and cache.result then
         ok, result, scores = true, cache.result, cache.scores
+        flags.s1 = "hit"
     else
         _G.llm_infer_n = (_G.llm_infer_n or 0) + 1
-        ok, result = pcall(function() return llm.score(context, cands) end)
+        local why
+        -- allow_sync = false：上文没预解码好、或后台预解码占着锁时，不在主线程上等待或现场解码，
+        -- 这次按键保持原顺序，下一次按键再重排（避免输入卡顿）
+        ok, result, why = pcall(function() return llm.score(context, cands, false) end)
         if ok and type(result) == "table" then
             scores = get_scores(llm, cands)
-            _G.llm_filter_cache = { ctx = context, input = input, result = result, scores = scores }
+            _G.llm_filter_cache = { key = key1, result = result, scores = scores }
+            flags.s1 = "miss"
+        else
+            flags.s1 = "skip:" .. tostring(why or "nil")
+            -- 预解码没就绪：补一次异步预解码，下一次按键就能用
+            if why == "unprepared" and llm.prepare then pcall(llm.prepare, context) end
         end
     end
 
@@ -374,14 +426,17 @@ local function inner(translation, env)
 
         -- 第二阶段：第一阶段选中 w1 并入上文，对剩余拼音的候选再打分，拼成 w1..w2 作为首选
         -- （每阶段结果缓存；编辑键清缓存时一并清除）。任何一步失败都退回第一阶段结果。
-        if best_e and best_e < #input and ordered[1] and context ~= "" then
+        if best_e and best_e < #input and ordered[1] and context ~= ""
+           and cfg.stage2 and not shrinking and (#input - best_e) >= cfg.stage2_min_rest then
             local w1 = ordered[1].text
             local rest = input:sub(best_e + 1)
             local fc = _G.llm_filter_cache
             local w2 = nil
             if fc and fc.s2 and fc.s2.w1 == w1 and fc.s2.rest == rest then
                 w2 = fc.s2.w2 or nil
+                flags.s2 = "hit"
             else
+                flags.s2 = "run"
                 local okc, r1 = pcall(second_stage, env, llm, context, w1, rest)
                 if okc and r1 then w2 = r1 end
                 if fc then fc.s2 = { w1 = w1, rest = rest, w2 = w2 or false } end
@@ -433,6 +488,7 @@ return function(translation, env)
 
     local t0 = os.clock()
     local n0 = _G.llm_infer_n or 0
+    flags = {}
 
     local native = {}
     for cand in translation:iter() do
@@ -453,8 +509,9 @@ return function(translation, env)
 
     if cfg.debug_latency then
         local input = env.engine.context.input or ""
-        append_line("llm_latency.txt", string.format("%d|%.1f|%d", #input,
-            (os.clock() - t0) * 1000, (_G.llm_infer_n or 0) - n0))
+        append_line("llm_latency.txt", string.format("%d|%.1f|%d|s1=%s|s2=%s|shr=%s", #input,
+            (os.clock() - t0) * 1000, (_G.llm_infer_n or 0) - n0,
+            flags.s1 or "-", flags.s2 or "-", flags.shr or "-"))
     end
 
     for _, c in ipairs(cap) do yield(c) end
