@@ -51,6 +51,7 @@ struct Options {
     int n_seq_max = 0;                          // 0 = 用引擎默认（12）
     int idle_sec = 0;                           // 屏幕亮着时的空闲卸载时限；0 = 不自动卸载
     int screen_off_sec = 0;                     // 熄屏后的空闲卸载时限；0 = 不单独设（手动启停为主，默认不自动卸载）
+    int orphan_sec = 600;                       // 状态目录（Trime 的数据目录）消失超过这么久就自己退出；0 = 不检查
     int restarts = 0;
     std::string last_exit = "none";
 };
@@ -58,6 +59,8 @@ Options g_opt;
 std::vector<std::string> g_raw_args;            // 监督进程把原始参数原样传给子进程
 
 std::atomic<bool> g_stop{false};
+std::atomic<bool> g_orphan{false};            // 因为状态目录长期消失（Trime 被卸载）而退出：监督进程看到退出码 77 就不再重启
+constexpr int kOrphanExit = 77;
 void on_term(int) { g_stop.store(true); }
 
 long long now_s() { return (long long)time(nullptr); }
@@ -267,9 +270,16 @@ std::string build_status(const char * role, const char * state) {
 }
 
 void status_thread() {
-    long long next = 0;
+    long long next = 0, missing_since = 0;
     while (!g_stop.load()) {
         long long now = proto::mono_ms();
+        // 孤儿保护：Trime 被卸载后，它的数据目录会消失，没人能再关掉这个进程，模型就一直占着内存。
+        // 目录持续不在超过 orphan_sec 就自己退出（监督进程也跟着结束）；重新安装 Trime 后，点红色徽标即可再次拉起。
+        if (g_opt.orphan_sec > 0 && !g_opt.rime_dir.empty()) {
+            if (access(g_opt.rime_dir.c_str(), F_OK) == 0) missing_since = 0;
+            else if (missing_since == 0) { missing_since = now; logf("rime dir %s is gone; will exit in %ds unless it comes back", g_opt.rime_dir.c_str(), g_opt.orphan_sec); }
+            else if (now - missing_since >= (long long)g_opt.orphan_sec * 1000) { logf("rime dir gone for %ds: orphaned, exiting", g_opt.orphan_sec); g_orphan.store(true); g_stop.store(true); break; }
+        }
         if (now >= next) {
             std::string p = status_path();
             if (!p.empty()) write_file_atomic(p, build_status("daemon", "running"), 0664);
@@ -415,7 +425,7 @@ int run_daemon() {
     if (!status_path().empty()) write_file_atomic(status_path(), build_status("daemon", "stopped"), 0664);
     close(g_listen_fd);
     fflush(stderr);
-    exit(0);   // 触发引擎的 atexit 清理（释放模型）
+    exit(g_orphan.load() ? kOrphanExit : 0);   // 触发引擎的 atexit 清理（释放模型）
     return 0;
 }
 
@@ -518,6 +528,10 @@ int run_supervisor(char ** argv) {
             }
             usleep(200 * 1000);
         }
+        if (WIFEXITED(st) && WEXITSTATUS(st) == kOrphanExit) {      // 工作进程因为 Trime 不见了而退出：监督进程也结束，不再重启
+            logf("child exited as orphan (Trime data dir gone); supervisor exiting");
+            return 0;
+        }
         long long up_s = (proto::mono_ms() - start) / 1000;
         g_opt.restarts++;
         g_opt.last_exit = reason + " after " + std::to_string(up_s) + "s";
@@ -557,6 +571,7 @@ int main(int argc, char ** argv) {
         else if (a == "--log-dir")    { v = need("--log-dir");         g_opt.log_dir = v; }
         else if (a == "--threads")    { v = need("--threads");         g_opt.threads = atoi(v.c_str()); }
         else if (a == "--max-ctx")    { v = need("--max-ctx");         g_opt.max_ctx = atoi(v.c_str()); }
+        else if (a == "--orphan-sec") { v = need("--orphan-sec");      g_opt.orphan_sec = atoi(v.c_str()); }
         else if (a == "--n-ctx")      { v = need("--n-ctx");           g_opt.n_ctx = atoi(v.c_str()); }
         else if (a == "--n-seq-max")  { v = need("--n-seq-max");       g_opt.n_seq_max = atoi(v.c_str()); }
         else if (a == "--idle-sec")   { v = need("--idle-sec");        g_opt.idle_sec = atoi(v.c_str()); }
