@@ -53,3 +53,27 @@ target_compile_definitions(rime_llm PRIVATE RIME_LLM_REPACK=$<BOOL:${RIME_LLM_RE
 if(RIME_LLM_VULKAN)
   target_compile_definitions(rime_llm PRIVATE RIME_LLM_GPU_LAYERS=99)
 endif()
+
+# ---- 守护进程方案（推荐）：推理在独立进程 rimellmd 里，Trime 里只放一个轻量客户端 ----
+# rimellmd：可执行文件，内嵌 Lua 5.4 核心 + 同一份推理引擎；以 shell 身份由 adb/Shizuku 拉起（见 daemon/rimellmctl.sh）
+file(GLOB LUA_CORE_SRC ${LUA_INC}/*.c)
+list(FILTER LUA_CORE_SRC EXCLUDE REGEX "/(lua|luac)\\.c$")
+add_library(lua_core STATIC ${LUA_CORE_SRC})
+target_compile_definitions(lua_core PRIVATE LUA_USE_POSIX)
+target_include_directories(lua_core PUBLIC ${LUA_INC})
+add_executable(rimellmd daemon/rimellmd.cpp ../../rime-llm-mac-port/rime_llm_mac.cpp)
+target_include_directories(rimellmd PRIVATE ${LUA_INC} ${LLAMA_DIR}/include ${LLAMA_DIR}/ggml/include)
+target_link_libraries(rimellmd PRIVATE lua_core llama log)
+target_compile_definitions(rimellmd PRIVATE RIME_LLM_REPACK=$<BOOL:${RIME_LLM_REPACK}>)
+target_link_options(rimellmd PRIVATE -Wl,--gc-sections)
+
+# librime_llm.so：Trime 里的客户端（库名 lib*.so，随 APK 打包进 lib/arm64-v8a/，由系统加载器按名字解析）
+add_library(rime_llm_client MODULE daemon/rime_llm_client.cpp)
+set_target_properties(rime_llm_client PROPERTIES PREFIX "lib" OUTPUT_NAME "rime_llm" SUFFIX ".so")
+target_include_directories(rime_llm_client PRIVATE ${LUA_INC})
+target_link_libraries(rime_llm_client PRIVATE log)
+if(RIME_LLM_HOST_LIB)
+  target_link_libraries(rime_llm_client PRIVATE ${RIME_LLM_HOST_LIB})
+else()
+  target_link_options(rime_llm_client PRIVATE -Wl,-z,undefs)
+endif()
