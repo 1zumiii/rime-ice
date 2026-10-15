@@ -307,5 +307,125 @@ static int lua_prepare(lua_State * L) {
     touch_use();
 """)
 
+
+# ---- 并发加固：模型生命周期读写锁、拿锁后再确认模型还在、可等待的计时线程停止、可重新初始化 ----
+patch("#include <condition_variable>\n", "#include <condition_variable>\n#include <shared_mutex>\n")
+
+# 1) 用「生命周期读写锁 + 可 join 的计时线程」替换前面写的计时线程实现
+_a = text.index("static void idle_watchdog() {")
+_b = text.index("// ---- 预解码的“最新待办” ----")
+text = text[:_a] + r"""// 模型生命周期读写锁：使用方（分词 / 打分 / 预解码）持共享锁，卸载方（空闲卸载、改 model_path、退出）持独占锁。
+// 保证：有人在用就不卸载；卸载进行时没人能用（拿不到共享锁就跳过这一次，而不是访问已释放的模型）。
+static std::shared_mutex g_life;
+static std::atomic<bool> g_shutting_down{false};   // 只在进程退出的 atexit 里置位，之后不再启动计时线程
+static std::thread * g_idle_thread = nullptr;       // 受 g_idle_mu 保护；由 stop_idle_watchdog 回收
+
+// 在已持有 g_life 独占锁时释放模型与上下文
+static void free_model_exclusive() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
+    if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+    g_vocab = nullptr;
+    g_loaded.store(false);
+    g_prep_ready = false;
+    g_prep_ctx.clear();
+    g_prep_logits.clear();
+}
+
+static void idle_watchdog() {
+    std::unique_lock<std::mutex> lk(g_idle_mu);
+    while (!g_idle_stop.load()) {
+        long long limit = g_idle_unload_ms.load();
+        if (limit <= 0 || !g_loaded.load()) { g_idle_cv.wait(lk); continue; }   // 没有要盯的：一直睡到被唤醒
+        long long since = now_ms() - g_last_use_ms.load();
+        if (since < limit) {                                                   // 睡到最早可能过期的时刻再看
+            g_idle_cv.wait_for(lk, std::chrono::milliseconds(limit - since + 50));
+            continue;
+        }
+        // 超过空闲时限：拿独占锁（任何使用方持着共享锁时拿不到，说明有人在用），并在锁内再确认一次
+        std::unique_lock<std::shared_mutex> life(g_life, std::try_to_lock);
+        if (life.owns_lock() && g_loaded.load() && now_ms() - g_last_use_ms.load() >= limit) {
+            if (const char * d = getenv("RIME_LLM_TEST_UNLOAD_DELAY_MS"))       // 仅测试用：拉长卸载窗口以复现竞态
+                std::this_thread::sleep_for(std::chrono::milliseconds(atoi(d)));
+            free_model_exclusive();
+            log_msg("model unloaded (idle %lld s)", limit / 1000);
+        } else {
+            g_idle_cv.wait_for(lk, std::chrono::seconds(5));                   // 有人在用：稍后再看
+        }
+    }
+}
+
+// 停止计时线程并等它真正退出。停止标志在锁内置位，避免丢失唤醒；返回前把状态归零，允许之后重新启动
+// （模块被重新初始化时 ensure_idle_watchdog 会再起一个）。
+static void stop_idle_watchdog() {
+    std::thread * t = nullptr;
+    {
+        std::lock_guard<std::mutex> l(g_idle_mu);
+        g_idle_stop.store(true);
+        t = g_idle_thread;
+        g_idle_thread = nullptr;
+    }
+    g_idle_cv.notify_all();
+    if (t) { if (t->joinable()) t->join(); delete t; }
+    g_idle_stop.store(false);
+}
+
+static void ensure_idle_watchdog() {
+    if (g_shutting_down.load()) return;
+    {
+        std::lock_guard<std::mutex> l(g_idle_mu);
+        if (!g_idle_thread) { g_idle_stop.store(false); g_idle_thread = new std::thread(idle_watchdog); }
+    }
+    g_idle_cv.notify_all();
+}
+
+""" + text[_b:]
+
+# 2) 退出 / 模块卸载：先停计时线程（等它退出），再卸载模型
+patch("static void cleanup_at_exit() {\n    g_idle_stop.store(true);\n    g_idle_cv.notify_all();\n    unload_model();\n    llama_backend_free();\n}",
+      "static void cleanup(bool final_exit) {\n"
+      "    if (final_exit) g_shutting_down.store(true);\n"
+      "    stop_idle_watchdog();\n"
+      "    unload_model();\n"
+      "    llama_backend_free();\n"
+      "}\n"
+      "static void cleanup_at_exit() { cleanup(true); }")
+patch("static int lua_gc_module(lua_State *) { cleanup_at_exit(); return 0; }",
+      "static int lua_gc_module(lua_State *) { cleanup(false); return 0; }   // 模块被卸载/重新初始化：不是进程退出，之后允许重新启动")
+
+# 3) unload_model 持独占锁：等所有使用方（共享锁）结束再释放
+patch("    while (g_loading.load())\n        std::this_thread::sleep_for(std::chrono::milliseconds(20));\n    std::lock_guard<std::mutex> lock(g_mutex);",
+      "    while (g_loading.load())\n        std::this_thread::sleep_for(std::chrono::milliseconds(20));\n"
+      "    std::unique_lock<std::shared_mutex> life(g_life);   // 等所有使用方结束，卸载期间没人能用模型\n"
+      "    std::lock_guard<std::mutex> lock(g_mutex);")
+
+# 4) lua_score / lua_prepare：整个调用期间持共享锁（分词用的 g_vocab 属于模型）
+patch("static int lua_score(lua_State * L) {\n    touch_use();\n",
+      "static int lua_score(lua_State * L) {\n    touch_use();\n"
+      "    // 整个调用期间持共享锁：分词用到的 g_vocab 属于模型，卸载线程拿不到独占锁就不会释放它；\n"
+      "    // 卸载正在进行时拿不到共享锁，这次直接跳过。\n"
+      "    std::shared_lock<std::shared_mutex> life(g_life, std::try_to_lock);\n"
+      "    if (!life.owns_lock()) { lua_pushnil(L); lua_pushstring(L, \"busy\"); return 2; }\n")
+patch("static int lua_prepare(lua_State * L) {\n    touch_use();\n",
+      "static int lua_prepare(lua_State * L) {\n    touch_use();\n"
+      "    std::shared_lock<std::shared_mutex> life(g_life, std::try_to_lock);   // 同上：分词期间模型不能被卸载\n"
+      "    if (!life.owns_lock()) { lua_pushboolean(L, 0); return 1; }            // 正在卸载：返回 false，处理器下次按键再请求\n")
+
+# 5) 预解码线程：持共享锁，并且在拿到锁之后再确认模型还在
+patch("    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);\n    if (!lock.owns_lock()) {\n        // 有人持锁（打分，或另一个预解码）",
+      "    // 持共享锁：卸载线程拿不到独占锁就不会释放模型；卸载进行中、或模型还没加载好，直接放弃（之后会重新请求）\n"
+      "    std::shared_lock<std::shared_mutex> life(g_life, std::try_to_lock);\n"
+      "    if (!life.owns_lock() || !g_loaded.load() || !g_ctx || !g_vocab) return;\n"
+      "    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);\n    if (!lock.owns_lock()) {\n        // 有人持锁（打分，或另一个预解码）")
+
+# 6) 打分：拿到解码锁之后再确认模型还在
+patch("    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason = \"busy\"; return; }",
+      "    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason = \"busy\"; return; }\n"
+      "    if (!g_loaded.load() || !g_ctx || !g_vocab) { g_score_skipped = true; g_score_skip_reason = \"unloaded\"; return; }")
+
+# 7) 加载：检查并置位要原子
+patch("    if (g_loaded.load() || g_loading.load()) return;\n    g_loading.store(true);",
+      "    if (g_loaded.load()) return;\n    if (g_loading.exchange(true)) return;   // 原子地「检查并置位」，不会重复创建模型")
+
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")
