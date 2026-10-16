@@ -16,6 +16,8 @@ patch:
     scan: 40           # 只在前 N 个候选里找
     min_count: 1       # 窗口内至少用过几次才提升
     max_records: 3000  # 记录文件最多保留多少条使用记录
+    pairs: true        # 个人词对：记住「前一个词→当前词」，同样的搭配再次出现时优先（lua/personal_pairs.lua，记录在 recent_pairs.tsv）
+    min_pair: 1.5      # 词对计数至少多大才提升（约需重复出现两次，单次偶然搭配或误选不提升；14 天衰减到 1/e）
 
   # ---------- 2. 冷词降频 / 删词（lua/cold_word_drop，已随官方提供） ----------
   # Control+j 降频到第 4 位，Control+x 隐藏，Control+d 强制删词
@@ -75,6 +77,7 @@ patch:
     max_tokens: 10
     expected_length_weight: 0   # 全拼保持 0
     freq_beta: 1.5
+    pair_gamma: 1.5             # 个人词对融合系数（前一个词→当前词的使用习惯），0 = 关闭
     scan_limit: 80
     idle_unload_minutes: 20     # 空闲这么多分钟没打字就卸载模型（还回约 320 MB 内存），下次打字自动加载（约 1 秒）；0 = 不卸载
     badge: "◇"                  # AI 按上文重排后的首选（单字符省空间）

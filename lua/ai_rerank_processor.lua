@@ -40,6 +40,8 @@ end
 local function reset_history()
     history = {}
     prev_hist = {}
+    local ok, pp = pcall(require, "personal_pairs")   -- 编辑位置变了，个人词对的「前一个词」也作废
+    if ok then pcall(pp.reset) end
 end
 
 local function user_dir()

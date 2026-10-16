@@ -30,7 +30,7 @@ if (-not $DryRun) {
 $xf = @("README.md","README.upstream.md","LICENSE","AGENTS.md",".gitignore","install.sh","recipe.yaml",
         "squirrel.yaml","squirrel.custom.yaml","rime_ice.custom.yaml","installation.yaml","user.yaml",
         "weasel.yaml",
-        "recent_words.tsv","custom_phrase.txt","user_freq.tsv",
+        "recent_words.tsv","recent_pairs.tsv","custom_phrase.txt","user_freq.tsv",
         "ai_rerank_filter.lua","ai_rerank_processor.lua","drop_words.lua","hide_words.lua","reduce_freq_words.lua","turn_down_words.lua")
 # weasel.yaml is NOT copied: the repo's copy would overwrite Weasel's own style (horizontal layout,
 # inline preedit, font sizes ...). Put style overrides in weasel.custom.yaml instead.

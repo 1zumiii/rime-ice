@@ -24,7 +24,7 @@ rsync -av $DRY \
   --exclude='install.sh' --exclude='tools/' --exclude='windows/' --exclude='llm-mac/' --exclude='recipe.yaml' \
   --exclude='build/' --exclude='sync/' --exclude='*.userdb/' \
   --exclude='installation.yaml' --exclude='user.yaml' \
-  --exclude='recent_words.tsv' --exclude='rime_llm.so' \
+  --exclude='recent_words.tsv' --exclude='recent_pairs.tsv' --exclude='rime_llm.so' \
   --exclude='lua/cold_word_drop/drop_words.lua' \
   --exclude='lua/cold_word_drop/hide_words.lua' \
   --exclude='lua/cold_word_drop/reduce_freq_words.lua' \

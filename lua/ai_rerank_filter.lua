@@ -11,6 +11,7 @@
 --   max_tokens              上文 token 数，默认 10
 --   expected_length_weight  预期词长加成，全拼设 0（默认 0）
 --   freq_beta               词频融合系数，默认 1.5
+--   pair_gamma              个人词对融合系数（前一个词 → 当前词，见 personal_pairs.lua），默认 1.5，0 = 关闭
 --   scan_limit              只在前 N 个候选里重排，其余惰性透传，默认 80
 --   stage2                  四字两阶段总开关，默认 true
 --   stage2_context_chars    第二阶段只用最后 N 个字作为上文，默认 8（现场解码，越短越快）
@@ -23,6 +24,7 @@ local cfg = {
     max_candidates = 5,
     expected_length_weight = 0,
     freq_beta = 1.5,
+    pair_gamma = 1.5,
     scan_limit = 80,
     stage2 = true,              -- 四字两阶段总开关；怀疑它有问题时设为 false
     stage2_context_chars = 8,   -- 第二阶段只用「上文+第一阶段选中词」的最后 N 个字，解码更快
@@ -35,6 +37,14 @@ local cfg = {
 -- 结果缓存：同一 (上文, 输入) 的评分复用（翻页/候选窗重建不重复推理）。
 -- 存 _G 以便 ai_rerank_processor 在编辑操作后清空。
 _G.llm_filter_cache = _G.llm_filter_cache or nil
+
+-- 个人词对：前一个词 → 候选 的衰减计数（模块不可用或没有前一个词时恒为 0）
+local okpp, pp = pcall(require, "personal_pairs")
+local function pair_eff(prev, w)
+    if not okpp or not prev or cfg.pair_gamma <= 0 then return 0 end
+    local ok, v = pcall(pp.eff, prev, w)
+    return (ok and v) or 0
+end
 
 local function is_finite_number(v)
     return type(v) == "number" and v == v and v > -math.huge and v < math.huge
@@ -63,6 +73,8 @@ local function init_config(env)
     if v ~= nil then cfg.expected_length_weight = math.max(0, v) end
     v = get_config_number(sc, "llm_rerank/freq_beta")
     if v ~= nil then cfg.freq_beta = math.max(0, v) end
+    v = get_config_number(sc, "llm_rerank/pair_gamma")
+    if v ~= nil then cfg.pair_gamma = math.max(0, v) end
     v = sc:get_int("llm_rerank/max_candidates")
     if v then cfg.max_candidates = v end
     v = sc:get_int("llm_rerank/scan_limit")
@@ -370,6 +382,7 @@ local function inner(translation, env)
         local fused_scores = nil
         if #ordered > 1 and scores then
             local freq_eff = _G.ai_rerank_freq_eff
+            local prev_word = okpp and cfg.pair_gamma > 0 and pp.prev() or nil
             fused_scores = {}
             local arr = {}
             for i, c in ipairs(ordered) do
@@ -377,6 +390,7 @@ local function inner(translation, env)
                 if is_valid_llm_score(s) then
                     local n = freq_eff and freq_eff(c.text) or 0
                     local t = s + cfg.freq_beta * math.log(1 + n)
+                        + cfg.pair_gamma * math.log(1 + pair_eff(prev_word, c.text))
                     fused_scores[c.text] = t
                     arr[i] = { c = c, t = t, idx = i }
                 else

@@ -7,6 +7,8 @@
 --   scan          只在前 scan 个候选里找，默认 40
 --   min_count     窗口内至少用过几次才提升，默认 1
 --   max_records   记录文件最多保留的使用记录数，默认 3000
+--   pairs         是否启用个人词对（前一个词 → 当前词，见 personal_pairs.lua），默认 true
+--   min_pair      词对计数至少多大才提升，默认 1.5（至少要重复出现两次左右；单次的偶然搭配或误选不会被提升）
 -- 使用记录保存在用户目录的 recent_words.tsv（每行：时间戳<Tab>词），不属于仓库，安装脚本会保留它。
 -- 多个应用的输入会话各自读取记录，新开的会话才会读到别处刚产生的记录。
 
@@ -83,6 +85,17 @@ function M.init(env)
     env.min_count = config:get_int(ns .. "/min_count") or 1
     local max_records = config:get_int(ns .. "/max_records") or 3000
 
+    local use_pairs = config:get_bool(ns .. "/pairs")
+    if use_pairs == nil then use_pairs = true end
+    env.min_pair = (config:get_double(ns .. "/min_pair") or 1.5)
+    if use_pairs then
+        local ok, pp = pcall(require, "personal_pairs")
+        if ok then
+            pcall(pp.init)
+            env.pp = pp
+        end
+    end
+
     env.path = record_path()
     local raw
     env.words, raw = load_records(env.path, os.time() - env.window)
@@ -97,6 +110,7 @@ function M.init(env)
             if not text or text == "" or text:find("[\t\r\n]") then return end
             local now = os.time()
             append_record(env.path, now, text)
+            if env.pp then env.pp.record(text, now) end
             local e = env.words[text]
             if e then
                 e.last = now
@@ -130,18 +144,26 @@ function M.func(input, env)
         if #buf >= env.scan then break end
     end
 
-    -- 找出窗口内用过的候选，按最近时间排序，取前 max_boost 个
+    -- 找出窗口内用过的、或与上一个词有个人词对的候选；词对命中的优先，其余按最近时间，取前 max_boost 个
+    local prev = env.pp and env.pp.prev(now) or nil
     local picked = {}
     for i, cand in ipairs(buf) do
-        local e = ELIGIBLE[cand.type] and env.words[cand.text]
-        if e and e.count >= env.min_count and now - e.last <= env.window then
-            picked[#picked + 1] = { pos = i, last = e.last, count = e.count }
+        if ELIGIBLE[cand.type] then
+            local e = env.words[cand.text]
+            local pe = prev and env.pp.eff(prev, cand.text, now) or 0
+            local recent = e and e.count >= env.min_count and now - e.last <= env.window
+            if recent or pe >= env.min_pair then
+                picked[#picked + 1] = { pos = i, last = e and e.last or 0, count = e and e.count or 0,
+                                        pair = pe >= env.min_pair and pe or 0 }
+            end
         end
     end
-    table.sort(picked, function(a, b)
+    local function better(a, b)
+        if a.pair ~= b.pair then return a.pair > b.pair end
         if a.last ~= b.last then return a.last > b.last end
         return a.count > b.count
-    end)
+    end
+    table.sort(picked, better)
     while #picked > env.max_boost do table.remove(picked) end
 
     -- 已经排在目标位置之前的不动；其余的依次插入到 idx、idx+1……
@@ -158,10 +180,7 @@ function M.func(input, env)
     if #move == 0 then
         for _, cand in ipairs(buf) do yield(cand) end
     else
-        table.sort(move, function(a, b)
-            if a.last ~= b.last then return a.last > b.last end
-            return a.count > b.count
-        end)
+        table.sort(move, better)
         local rest = {}
         for i, cand in ipairs(buf) do
             if not skip[i] then rest[#rest + 1] = cand end
