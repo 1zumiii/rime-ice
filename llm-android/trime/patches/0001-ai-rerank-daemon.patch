@@ -109,10 +109,10 @@ index 0867126c..77d6c69d 100644
                  windowManager.attachWindow(SwitchOptionWindow(di))
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt
 new file mode 100644
-index 00000000..8ddecc54
+index 00000000..8c6d5911
 --- /dev/null
 +++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,140 @@
 +/*
 + * SPDX-FileCopyrightText: 2026 1zumiii
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -144,6 +144,8 @@ index 00000000..8ddecc54
 +
 +    private const val REQUEST_CODE = 7301
 +    private const val MODEL_NAME = "Qwen3.5-0.8B-Q4_K_M.gguf"
++    private const val STUDENT_MODEL = "student.gguf"          // 放在 Trime 用户目录里即启用学生模型（需配套词表）
++    private const val STUDENT_VOCAB = "student.vocab.txt"
 +    private val main = Handler(Looper.getMainLooper())
 +
 +    @Volatile
@@ -189,13 +191,19 @@ index 00000000..8ddecc54
 +        mkdir -p ${'$'}D || exit 11
 +        if pidof rimellmd >/dev/null 2>&1; then echo RUNNING; exit 0; fi
 +        cp "$libDir/librimellmd.so" ${'$'}D/rimellmd.new && chmod 755 ${'$'}D/rimellmd.new && mv -f ${'$'}D/rimellmd.new ${'$'}D/rimellmd || { echo COPY_FAIL; exit 12; }
-+        if [ ! -f ${'$'}D/model.gguf ]; then
-+          [ -f "$rimeDir/$MODEL_NAME" ] || { echo NO_MODEL; exit 13; }
-+          cp "$rimeDir/$MODEL_NAME" ${'$'}D/model.gguf || { echo MODEL_COPY_FAIL; exit 14; }
++        if [ -f "$rimeDir/$STUDENT_MODEL" ] && [ -f "$rimeDir/$STUDENT_VOCAB" ]; then
++          cp "$rimeDir/$STUDENT_MODEL" ${'$'}D/student.gguf && cp "$rimeDir/$STUDENT_VOCAB" ${'$'}D/student.vocab.txt || { echo MODEL_COPY_FAIL; exit 14; }
++          ARGS="--model ${'$'}D/student.gguf --student-vocab ${'$'}D/student.vocab.txt --n-seq-max 10"
++        else
++          if [ ! -f ${'$'}D/model.gguf ]; then
++            [ -f "$rimeDir/$MODEL_NAME" ] || { echo NO_MODEL; exit 13; }
++            cp "$rimeDir/$MODEL_NAME" ${'$'}D/model.gguf || { echo MODEL_COPY_FAIL; exit 14; }
++          fi
++          ARGS="--model ${'$'}D/model.gguf --n-ctx 96 --n-seq-max 4"
 +        fi
 +        cd ${'$'}D
-+        ( setsid nohup ./rimellmd --supervise --model ${'$'}D/model.gguf --rime-dir "$rimeDir" --log-dir ${'$'}D \
-+            --port 17920 --threads 2 --idle-sec 0 --n-ctx 96 --n-seq-max 6 >> ${'$'}D/daemon.log 2>&1 < /dev/null & ) > /dev/null 2>&1 < /dev/null
++        ( setsid nohup ./rimellmd --supervise ${'$'}ARGS --rime-dir "$rimeDir" --log-dir ${'$'}D \
++            --port 17920 --threads 2 --idle-sec 0 >> ${'$'}D/daemon.log 2>&1 < /dev/null & ) > /dev/null 2>&1 < /dev/null
 +        sleep 1
 +        pidof rimellmd >/dev/null 2>&1 && echo STARTED || { echo START_FAIL; exit 15; }
 +        """.trimIndent()
@@ -247,7 +255,7 @@ index 00000000..8ddecc54
 +}
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
 new file mode 100644
-index 00000000..327da0c8
+index 00000000..c78d770f
 --- /dev/null
 +++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
 @@ -0,0 +1,239 @@
@@ -465,7 +473,7 @@ index 00000000..327da0c8
 +            loaded ->
 +                show(
 +                    GREEN,
-+                    "AI 重排：在线\n内存 ${j.optLong("rss_kb") / 1024} MB，" +
++                    "AI 重排：在线（${if (j.optBoolean("student")) "学生模型" else "Qwen 0.8B"}）\n内存 ${j.optLong("rss_kb") / 1024} MB，" +
 +                        "最近一次打分 ${j.optInt("last_score_ms")} ms（平均 ${"%.1f".format(j.optDouble("avg_score_ms"))} ms）\n" +
 +                        "已处理 ${j.optLong("scores")} 次，跳过 ${j.optLong("skipped")} 次，错误 ${j.optLong("errors")} 次\n" +
 +                        "屏幕${if (j.optString("screen") == "off") "熄灭" else "亮着"}，" +

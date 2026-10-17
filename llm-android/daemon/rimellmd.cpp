@@ -43,6 +43,7 @@ struct Options {
     bool supervise = false;
     int port = proto::kDefaultPort;
     std::string model;
+    std::string student_vocab;                  // 非空 = 学生模式（字符级小模型），model 是学生的 GGUF
     std::string rime_dir;                       // 状态文件、令牌文件所在目录（Trime 的 rime 用户目录）
     std::string log_dir = "/data/local/tmp/rimellm";
     int threads = 4;
@@ -260,10 +261,11 @@ std::string build_status(const char * role, const char * state) {
         "{\"ts\":%lld,\"role\":\"%s\",\"state\":\"%s\",\"pid\":%d,\"version\":\"%s\",\"uptime_s\":%lld,"
         "\"enabled\":%s,\"model_loaded\":%s,\"rss_kb\":%ld,\"clients\":%d,\"requests\":%lld,\"errors\":%lld,"
         "\"scores\":%lld,\"skipped\":%lld,\"last_score_ms\":%d,\"avg_score_ms\":%.1f,\"max_score_ms\":%d,"
-        "\"screen\":\"%s\",\"idle_unload_sec\":%d,\"restarts\":%d,\"last_exit\":\"%s\",\"last_request_s\":%lld,\"port\":%d}",
+        "\"student\":%s,\"screen\":\"%s\",\"idle_unload_sec\":%d,\"restarts\":%d,\"last_exit\":\"%s\",\"last_request_s\":%lld,\"port\":%d}",
         now_s(), role, state, (int)getpid(), proto::kVersion, up, g_enabled.load() ? "true" : "false", ready ? "true" : "false", read_rss_kb(),
         g_clients.load(), g_requests.load(), g_errors.load(), sc, g_skipped.load(), g_last_score_ms.load(),
         sc ? (double)g_score_ms_sum.load() / (double)sc : 0.0, g_max_score_ms.load(),
+        g_opt.student_vocab.empty() ? "false" : "true",
         g_screen_off.load() ? "off" : "on", effective_idle(),
         g_opt.restarts, json_escape(g_opt.last_exit).c_str(), g_last_req_s.load(), g_opt.port);
     return buf;
@@ -388,6 +390,7 @@ int run_daemon() {
     g_idle_normal.store(g_opt.idle_sec);
     set_prop_str("log_dir", g_opt.log_dir);
     set_prop_str("model_path", g_opt.model);
+    if (!g_opt.student_vocab.empty()) set_prop_str("student_vocab", g_opt.student_vocab);
     set_prop_int("n_threads", g_opt.threads);
     set_prop_int("max_ctx", g_opt.max_ctx);
     if (g_opt.n_ctx > 0) set_prop_int("n_ctx", g_opt.n_ctx);
@@ -567,6 +570,7 @@ int main(int argc, char ** argv) {
         std::string v;
         if (a == "--port")            { v = need("--port");            g_opt.port = atoi(v.c_str()); }
         else if (a == "--model")      { v = need("--model");           g_opt.model = v; }
+        else if (a == "--student-vocab") { v = need("--student-vocab"); g_opt.student_vocab = v; }
         else if (a == "--rime-dir")   { v = need("--rime-dir");        g_opt.rime_dir = v; }
         else if (a == "--log-dir")    { v = need("--log-dir");         g_opt.log_dir = v; }
         else if (a == "--threads")    { v = need("--threads");         g_opt.threads = atoi(v.c_str()); }

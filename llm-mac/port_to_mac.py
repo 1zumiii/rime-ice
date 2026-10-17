@@ -437,5 +437,145 @@ patch("    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason 
 patch("    if (g_loaded.load() || g_loading.load()) return;\n    g_loading.store(true);",
       "    if (g_loaded.load()) return;\n    if (g_loading.exchange(true)) return;   // 原子地「检查并置位」，不会重复创建模型")
 
+
+# ---- 学生模式（输入法专用小模型，字符级词表；由 Lua 属性 student_vocab 开启，llm-android 使用）----
+# 词表文件一行一个字符，行号即编号（0=<pad> 1=<unk> 2=<bos>）；输入 = <bos> + 上文最后 N 个字 + 候选的字，
+# 打分 = 候选各字在上文之后的对数概率之和（各位置权重均为 1，与蒸馏评测同口径）。
+patch("#include <cstdio>\n",
+      "#include <cstdio>\n#include <fstream>\n#include <unordered_map>\n")
+patch("static int g_score_log_cnt = 0;",
+      "static int g_score_log_cnt = 0;\n"
+      "static bool g_student = false;                          // 学生模式：字符级词表，不用 llama 的分词器\n"
+      "static std::string g_student_vocab_path;\n"
+      "static std::unordered_map<std::string, int> g_student_map;\n"
+      "static int g_student_ctx_chars = 30;                    // 上文最多取最后 N 个字（训练时的上限）\n"
+      "static constexpr int kStudentCandMax = 12;              // 候选最多打分的字数\n"
+      "static constexpr int kStudentSeqCells = 48;             // 每条序列的 KV 格数（>= <bos> + 30 + 12）")
+patch("        int n_thr = g_n_threads;\n",
+      "        int n_thr = g_n_threads;\n"
+      "        if (g_student) {\n"
+      "            g_student_map.clear();\n"
+      "            std::ifstream vf(g_student_vocab_path);\n"
+      "            std::string line; int id = 0;\n"
+      "            while (std::getline(vf, line)) {\n"
+      "                if (!line.empty() && line.back() == '\\r') line.pop_back();\n"
+      "                g_student_map.emplace(line, id++);\n"
+      "            }\n"
+      "            if (id < 8) {\n"
+      "                log_msg(\"ERROR: student vocab unreadable: %s\", g_student_vocab_path.c_str());\n"
+      "                llama_model_free(g_model); g_model = nullptr; g_vocab = nullptr;\n"
+      "                g_loading.store(false);\n"
+      "                return;\n"
+      "            }\n"
+      "            log_msg(\"student mode: vocab=%d ctx_chars=%d\", id, g_student_ctx_chars);\n"
+      "        }\n")
+patch("        cparams.n_ctx           = g_n_ctx;",
+      "        cparams.n_ctx           = g_student ? g_n_seq_max * kStudentSeqCells : g_n_ctx;")
+patch("static std::vector<llama_token> tokenize(const char * text) {\n",
+      "// 学生模式分词：按 UTF-8 字符查表，查不到记 <unk>\n"
+      "static std::vector<llama_token> student_chars(const char * text) {\n"
+      "    std::vector<llama_token> out;\n"
+      "    const unsigned char * p = (const unsigned char *)text;\n"
+      "    while (*p) {\n"
+      "        int len = (*p < 0x80) ? 1 : (*p >> 5) == 6 ? 2 : (*p >> 4) == 14 ? 3 : (*p >> 3) == 30 ? 4 : 1;\n"
+      "        std::string ch((const char *)p, len);\n"
+      "        auto it = g_student_map.find(ch);\n"
+      "        out.push_back(it == g_student_map.end() ? 1 : it->second);\n"
+      "        for (int i = 0; i < len && *p; i++) p++;\n"
+      "    }\n"
+      "    return out;\n"
+      "}\n\n"
+      "static std::vector<llama_token> tokenize(const char * text) {\n"
+      "    if (g_student) return student_chars(text);\n")
+patch("static std::vector<llama_token> ctx_token_ids(const char * context) {\n",
+      "static std::vector<llama_token> ctx_token_ids(const char * context) {\n"
+      "    if (g_student) {\n"
+      "        auto ids = student_chars(context);\n"
+      "        if (ids.size() < 2) return {};                       // 上文不足两个字：不重排（与训练时 min_ctx 一致）\n"
+      "        if ((int)ids.size() > g_student_ctx_chars) ids.erase(ids.begin(), ids.end() - g_student_ctx_chars);\n"
+      "        ids.insert(ids.begin(), 2);                          // <bos>\n"
+      "        return ids;\n"
+      "    }\n")
+# 学生模式的打分：逐字位置并行解码，各位置权重 1
+patch("static void score_batch(const std::vector<llama_token> & ctx_ids,",
+      "static void score_student_locked(const std::vector<llama_token> & ctx_ids,\n"
+      "                                 const std::vector<std::vector<llama_token>> & cands,\n"
+      "                                 std::vector<double> & out) {\n"
+      "    int n = (int)cands.size(), ctx_len = (int)ctx_ids.size(), vs = llama_n_vocab(g_vocab);\n"
+      "    auto * mem = llama_get_memory(g_ctx);\n"
+      "    bool use_prep = g_prep_ready && ctx_ids == g_prep_ctx && g_seq0_gen == g_prep_gen;\n"
+      "    if (!use_prep && g_score_require_prep) { g_score_skipped = true; g_score_skip_reason = \"unprepared\"; return; }\n"
+      "    std::vector<float> ctx_logits;\n"
+      "    if (!use_prep) {\n"
+      "        llama_memory_clear(mem, false);\n"
+      "        llama_batch cb = llama_batch_init(ctx_len, 0, 1);\n"
+      "        for (int j = 0; j < ctx_len; j++) { cb.token[j] = ctx_ids[j]; cb.pos[j] = j; cb.n_seq_id[j] = 1; cb.seq_id[j][0] = 0; }\n"
+      "        cb.logits[ctx_len - 1] = 1; cb.n_tokens = ctx_len;\n"
+      "        if (llama_decode(g_ctx, cb) == 0) {\n"
+      "            g_seq0_gen++;\n"
+      "            float * cl = llama_get_logits_ith(g_ctx, ctx_len - 1);\n"
+      "            if (cl) ctx_logits.assign(cl, cl + vs);\n"
+      "        }\n"
+      "        llama_batch_free(cb);\n"
+      "        if (ctx_logits.empty()) return;\n"
+      "        g_prep_gen = g_seq0_gen; g_prep_ctx = ctx_ids; g_prep_logits = ctx_logits; g_prep_ready = true;\n"
+      "    } else {\n"
+      "        ctx_logits = g_prep_logits;\n"
+      "    }\n"
+      "    std::vector<double> ce(n, 0);\n"
+      "    float m0; double lse0;\n"
+      "    logits_normalizer(ctx_logits.data(), vs, m0, lse0);\n"
+      "    for (int i = 0; i < n; i++) ce[i] = ce_target(ctx_logits.data(), cands[i][0], m0, lse0);\n"
+      "    std::vector<int> act, seq_of(n, -1);\n"
+      "    int maxlen = 1;\n"
+      "    for (int i = 0; i < n; i++) if (cands[i].size() >= 2) { seq_of[i] = (int)act.size() + 1; act.push_back(i); maxlen = std::max(maxlen, (int)cands[i].size()); }\n"
+      "    maxlen = std::min(maxlen, kStudentCandMax);\n"
+      "    for (int ci : act) llama_memory_seq_cp(mem, 0, seq_of[ci], 0, -1);\n"
+      "    bool failed = false;\n"
+      "    for (int p = 1; p < maxlen && !failed; p++) {\n"
+      "        std::vector<int> cur;\n"
+      "        for (int ci : act) if ((int)cands[ci].size() > p) cur.push_back(ci);\n"
+      "        if (cur.empty()) break;\n"
+      "        llama_batch b = llama_batch_init((int)cur.size(), 0, (int)cur.size());\n"
+      "        for (int k = 0; k < (int)cur.size(); k++) {\n"
+      "            int ci = cur[k];\n"
+      "            b.token[k] = cands[ci][p - 1]; b.pos[k] = ctx_len + p - 1;\n"
+      "            b.n_seq_id[k] = 1; b.seq_id[k][0] = seq_of[ci]; b.logits[k] = 1;\n"
+      "        }\n"
+      "        b.n_tokens = (int)cur.size();\n"
+      "        if (llama_decode(g_ctx, b) == 0) {\n"
+      "            for (int k = 0; k < (int)cur.size(); k++) {\n"
+      "                float * l = llama_get_logits_ith(g_ctx, k);\n"
+      "                if (l) ce[cur[k]] += cross_entropy(l, vs, cands[cur[k]][p]); else ce[cur[k]] = 1e10;\n"
+      "            }\n"
+      "        } else {\n"
+      "            failed = true; g_prep_ready = false;\n"
+      "            log_msg(\"WARN: student decode failed at position %d\", p);\n"
+      "        }\n"
+      "        llama_batch_free(b);\n"
+      "    }\n"
+      "    for (int ci : act) llama_memory_seq_rm(mem, seq_of[ci], 0, -1);\n"
+      "    for (int i = 0; i < n; i++) out[i] = (!failed && ce[i] < 1e9) ? -ce[i] : -1e10;\n"
+      "}\n\n"
+      "static void score_batch(const std::vector<llama_token> & ctx_ids,")
+patch("    if (!g_loaded.load() || !g_ctx || !g_vocab) { g_score_skipped = true; g_score_skip_reason = \"unloaded\"; return; }\n    auto t1",
+      "    if (!g_loaded.load() || !g_ctx || !g_vocab) { g_score_skipped = true; g_score_skip_reason = \"unloaded\"; return; }\n"
+      "    if (g_student) { score_student_locked(ctx_ids, cands, scores_out); return; }\n    auto t1")
+# 候选数上限：工作序列要占 seq 1..M，所以最多 n_seq_max - 1 个（原写法在候选数 = n_seq_max 时会越界）
+patch("    if (n > g_n_seq_max) n = g_n_seq_max;",
+      "    if (n > g_n_seq_max - 1) n = g_n_seq_max - 1;")
+patch("    else if (strcmp(key, \"use_repack\") == 0) g_use_repack = lua_toboolean(L, 3) != 0;",
+      "    else if (strcmp(key, \"use_repack\") == 0) g_use_repack = lua_toboolean(L, 3) != 0;\n"
+      "    else if (strcmp(key, \"student_vocab\") == 0) { g_student_vocab_path = luaL_checkstring(L, 3); g_student = !g_student_vocab_path.empty(); }\n"
+      "    else if (strcmp(key, \"student_ctx\") == 0) g_student_ctx_chars = (int)luaL_checkinteger(L, 3);")
+
+# 学生模型的 GGUF 自带的 SPM 词表没有换行符，llama_tokenize 会抛异常：预热改为直接解码一个 <bos>
+patch("            int n_tokens = llama_tokenize(g_vocab, warmup, (int)strlen(warmup),\n"
+      "                                           tokens, 4, true, true);",
+      "            int n_tokens = 0;\n"
+      "            if (g_student) { tokens[0] = 2; n_tokens = 1; }   // <bos>\n"
+      "            else n_tokens = llama_tokenize(g_vocab, warmup, (int)strlen(warmup),\n"
+      "                                           tokens, 4, true, true);")
+
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")

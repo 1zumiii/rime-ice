@@ -4,7 +4,7 @@
   llm_rerank/stage2: false
   # 轻量档：手机 CPU 上实测（空闲时，新候选打分）：5 个候选 p50≈118 ms / 最大 217 ms；3 个候选 p50≈78 ms / 最大 124 ms。
   # 上文 token 10→6 缩短上屏后的后台预解码（耗电发热的大头）。
-  llm_rerank/max_candidates: 3
+  llm_rerank/max_candidates: 6
   llm_rerank/max_tokens: 6
   # 手动启停（点工具栏的 AI 徽标）：不自动卸载，开着就一直在线；关闭时模型立刻卸载、推理进程只剩待命。
   llm_rerank/idle_unload_minutes: 0
