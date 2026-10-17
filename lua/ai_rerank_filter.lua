@@ -496,7 +496,15 @@ return function(translation, env)
     if not env.engine.context:get_option("ai_rerank") then
         dbg("filter called: switch OFF in this session")
         _G.ai_select_info = nil   -- 选词统计：本次没有重排，按原顺序记
-        for cand in translation:iter() do yield(cand) end
+        local first_seen = false
+        for cand in translation:iter() do
+            if _G.ai_select_stats_on and not first_seen then
+                first_seen = true
+                _G.ai_select_info = { input = env.engine.context.input or "", o = {}, f = {}, n = 0,
+                                      s1 = "-", s2 = "-", ft = cand.text, of = cand.text, off = true }
+            end
+            yield(cand)
+        end
         return
     end
     dbg("filter called: switch ON")
@@ -528,7 +536,8 @@ return function(translation, env)
         for i, c in ipairs(native) do if not o[c.text] then o[c.text] = i end end
         for i, c in ipairs(cap) do if not fpos[c.text] then fpos[c.text] = i end end
         _G.ai_select_info = { input = env.engine.context.input or "", o = o, f = fpos, n = #native,
-                              s1 = flags.s1 or "-", s2 = flags.s2 or "-" }
+                              s1 = flags.s1 or "-", s2 = flags.s2 or "-",
+                              ft = cap[1] and cap[1].text or "", of = native[1] and native[1].text or "" }
     end
 
     if cfg.debug_latency then

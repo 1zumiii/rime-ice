@@ -80,7 +80,7 @@ end
 local function append_record(path, ts, text)
     local f = io.open(path, "a")
     if not f then return end
-    f:write(string.format("%d\t%s\n", ts, text))
+    f:write(string.format("%d\t%s\n", ts - ts % 60, text))   -- 落盘的时间戳只到分钟
     f:close()
 end
 

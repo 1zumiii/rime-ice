@@ -83,11 +83,13 @@ end
 function M.record(text, ts)
     ts = ts or os.time()
     local pv = M.prev(ts)
-    if pv and usable(pv) and usable(text) then
+    -- 两个都是单字（的、是、了之类）的搭配信息量很低、噪声多，不记
+    local single = pv and (utf8.len(pv) or 0) == 1 and (utf8.len(text) or 0) == 1
+    if pv and usable(pv) and usable(text) and not single then
         bump(pv, text, ts)
         local f = io.open(path, "a")
         if f then
-            f:write(string.format("%d\t%s\t%s\n", ts, pv, text))
+            f:write(string.format("%d\t%s\t%s\n", ts - ts % 60, pv, text))   -- 落盘的时间戳只到分钟
             f:close()
         end
     end

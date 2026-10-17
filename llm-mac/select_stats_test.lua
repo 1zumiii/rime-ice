@@ -77,5 +77,98 @@ ls = read_lines()
 f = {}
 for x in (ls[3] or ""):gmatch("[^\t]+") do f[#f + 1] = x end
 check("过期信息不使用", f[5] == "0" and f[6] == "2", table.concat(f, ","))
+
+-- ===== 训练语料 select_corpus.tsv =====
+local function mk_env2(selected_text, sel_index, ai, input, anchor_rate)
+  local cb
+  local ctx = {
+    input = input,
+    select_notifier = { connect = function(_, f) cb = f end },
+    option_update_notifier = { connect = function() end },
+    commit_notifier = { connect = function() end },
+    get_option = function(_, n) return n == "ai_rerank" and ai end,
+    get_selected_candidate = function() return { text = selected_text, type = "phrase" } end,
+    composition = { back = function() return { selected_index = sel_index } end },
+  }
+  local env = { engine = { context = ctx, schema = { config = {
+    get_string = function() return "" end, get_int = function() return nil end, get_bool = function() return nil end,
+    get_double = function(_, k) if k == "llm_rerank/select_anchor_rate" then return anchor_rate end return nil end } } } }
+  return env, function() cb(ctx) end, ctx
+end
+local function corpus_lines()
+  local t = {}
+  local f = io.open(tmp .. "/select_corpus.tsv", "r")
+  if not f then return t end
+  for l in f:lines() do t[#t + 1] = l end
+  f:close()
+  return t
+end
+local function fields(l) local r = {}; for x in (l .. "\t"):gmatch("([^\t]*)\t") do r[#r + 1] = x end; return r end
+
+check("没有 select_corpus.enabled 时不写语料", #corpus_lines() == 0)
+io.open(tmp .. "/select_corpus.enabled", "w"):close()
+-- 难例：选了最终顺序的第二位
+local env3, fire3, ctx3 = mk_env2("精力", 1, true, "jingli", 0.0)
+mod.init(env3)
+_G.ai_select_info = { input = "jingli", o = { ["经理"] = 1, ["精力"] = 3 }, f = { ["经理"] = 1, ["精力"] = 2 }, n = 3, s1 = "hit", s2 = "-", ft = "经理", of = "经理" }
+fire3()
+local cl = corpus_lines()
+check("难例写入一行", #cl == 1, tostring(#cl))
+local cf = fields(cl[1] or "")
+check("语料 10 列", #cf == 10, tostring(#cf))
+check("难例：所选、最终首位、原顺序首位、类型", cf[5] == "精力" and cf[6] == "经理" and cf[7] == "经理" and cf[8] == "hard", table.concat(cf, "|"))
+check("时间戳只到分钟", tonumber(cf[2]) % 60 == 0)
+-- 选了首位且锚点率为 0：不记
+local env4, fire4 = mk_env2("经理", 0, true, "jingli", 0.0)
+mod.init(env4)
+_G.ai_select_info = { input = "jingli", o = { ["经理"] = 1 }, f = { ["经理"] = 1 }, n = 3, s1 = "hit", s2 = "-", ft = "经理", of = "经理" }
+fire4()
+check("选首位且锚点率 0：不记语料", #corpus_lines() == 1)
+-- 锚点率 1：记为 anchor
+local env5, fire5 = mk_env2("经理", 0, true, "jingli2", 1.0)
+mod.init(env5)
+_G.ai_select_info = { input = "jingli2", o = { ["经理"] = 1 }, f = { ["经理"] = 1 }, n = 3, s1 = "hit", s2 = "-", ft = "经理", of = "经理" }
+fire5()
+cl = corpus_lines(); cf = fields(cl[2] or "")
+check("锚点率 1：记为 anchor", #cl == 2 and cf[8] == "anchor", cf[8])
+-- 英文候选不记
+local env6, fire6 = mk_env2("hello", 1, true, "hello", 1.0)
+mod.init(env6); _G.ai_select_info = nil; fire6()
+check("英文候选不记语料", #corpus_lines() == 2)
+-- 选词后马上退格：追加 revise 标记
+local env7, fire7, ctx7 = mk_env2("精力", 1, true, "jingli3", 0.0)
+mod.init(env7)
+_G.ai_select_info = { input = "jingli3", o = {}, f = { ["精力"] = 2 }, n = 3, s1 = "hit", s2 = "-", ft = "经理", of = "经理" }
+fire7()
+ctx7.input = ""
+local bs = { release = function() return false end, repr = function() return "BackSpace" end }
+mod.func(bs, env7)
+cl = corpus_lines()
+check("退格后追加 revise 行", #cl == 4 and cl[4]:match("^revise\t") ~= nil, cl[4] or "无")
+local rid = (cl[3] or ""):match("^([^\t]+)")
+check("revise 指向刚记的那条", cl[4] == "revise\t" .. rid)
+
+
+-- ===== 光标被点动后清空上文 =====
+do
+  local pp = require("personal_pairs")
+  local notifier_cb
+  local opts = { ai_ctx_reset = false }
+  local ctx = { input = "", commit_history = { to_table = function() return { 1, 2, 3 } end },
+    select_notifier = { connect = function() end }, commit_notifier = { connect = function() end },
+    option_update_notifier = { connect = function(_, f) notifier_cb = f end },
+    get_option = function(_, n) return opts[n] end, set_option = function(_, n, v) opts[n] = v end }
+  local env = { engine = { context = ctx, schema = { config = { get_string = function() return "" end, get_int = function() return nil end,
+    get_bool = function() return nil end, get_double = function() return nil end } } } }
+  pp._reset_all(); pp.init(tmp .. "/recent_pairs.tsv")
+  pp.record("明天", os.time())
+  check("重置前有前一个词", pp.prev() == "明天")
+  mod.init(env)
+  opts.ai_ctx_reset = true
+  notifier_cb(ctx, "ai_ctx_reset")
+  check("收到 ai_ctx_reset 后前一个词作废", pp.prev() == nil)
+  check("选项被还原成 false（可再次触发）", opts.ai_ctx_reset == false)
+end
+
 print(fails == 0 and "全部通过" or ("失败 " .. fails))
 os.exit(fails == 0 and 0 or 1)

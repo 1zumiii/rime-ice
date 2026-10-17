@@ -569,7 +569,7 @@ index a01ab529..5fa3ed12 100644
      }
  }
 diff --git a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
-index 0b9b4ac8..819f0c92 100644
+index 0b9b4ac8..068e7e31 100644
 --- a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
 @@ -7,6 +7,9 @@ package com.osfans.trime.ime.core
@@ -582,7 +582,17 @@ index 0b9b4ac8..819f0c92 100644
  import android.content.IntentFilter
  import android.content.pm.ActivityInfo
  import android.content.res.Configuration
-@@ -167,7 +170,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+@@ -97,6 +100,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+ 
+     private var cursorUpdateIndex = 0
+ 
++    // 输入法自己最近一次编辑输入框的时间；光标变化发生在它之后很久，说明是用户点击或拖动了光标
++    private var lastOwnEditAt = 0L
++
+     private val recreateInputViewPrefs: Array<PreferenceDelegate<*>> = arrayOf(
+         prefs.keyboard.expandKeypressArea,
+         prefs.keyboard.hideKeySymbol,
+@@ -167,7 +173,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
          }
      }
  
@@ -610,7 +620,7 @@ index 0b9b4ac8..819f0c92 100644
          val intentFilter =
              IntentFilter().apply {
                  addAction(RimeIntentReceiver.ACTION_DEPLOY)
-@@ -183,6 +206,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+@@ -183,6 +209,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
  
      override fun onCreate() {
          rime = RimeDaemon.createSession(javaClass.name)
@@ -618,7 +628,7 @@ index 0b9b4ac8..819f0c92 100644
          lifecycleScope.launch {
              jobs.consumeEach { it.join() }
          }
-@@ -342,6 +366,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+@@ -342,6 +369,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
          ColorManager.removeOnChangedListener(onColorChangeListener)
          super.onDestroy()
          unregisterReceiver(rimeIntentReceiver)
@@ -626,6 +636,50 @@ index 0b9b4ac8..819f0c92 100644
          RimeDaemon.destroySession(javaClass.name)
      }
  
+@@ -457,6 +485,11 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+             candidatesEnd,
+         )
+         cursorUpdateIndex += 1
++        // 光标位置变了、而且不是输入法自己的编辑引起的（用户点击或拖动了光标，例如回头补充内容）：
++        // 通知 Lua 清空 AI 重排的上文和个人词对的“前一个词”
++        if (oldSelStart != newSelStart && SystemClock.uptimeMillis() - lastOwnEditAt > 500) {
++            postRimeJob { setRuntimeOption("ai_ctx_reset", true) }
++        }
+         handleCursorUpdate(newSelStart, newSelEnd, candidatesStart, candidatesEnd, cursorUpdateIndex)
+         inputView?.updateSelection(newSelStart, newSelEnd)
+     }
+@@ -621,6 +654,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+ 
+     fun commitText(text: String) {
+         val ic = currentInputConnection ?: return
++        lastOwnEditAt = SystemClock.uptimeMillis()
+ 
+         // when composing text equals commit content, finish composing text as-is
+         if (composingText.isNotEmpty() && composingText == text) {
+@@ -666,6 +700,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+         metaState: Int = 0,
+     ): Boolean {
+         val ic = currentInputConnection ?: return false
++        lastOwnEditAt = SystemClock.uptimeMillis()
+         return ic.sendKeyEvent(
+             KeyEvent(
+                 eventTime,
+@@ -688,6 +723,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+         metaState: Int = 0,
+     ): Boolean {
+         val ic = currentInputConnection ?: return false
++        lastOwnEditAt = SystemClock.uptimeMillis()
+         return ic.sendKeyEvent(
+             KeyEvent(
+                 eventTime,
+@@ -959,6 +995,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+ 
+     internal fun updateComposingText(text: String) {
+         val ic = currentInputConnection ?: return
++        lastOwnEditAt = SystemClock.uptimeMillis()
+         ic.beginBatchEdit()
+         if (composingText.isNotEmpty() || text.isNotEmpty()) {
+             if (!ic.getSelectedText(0).isNullOrEmpty()) {
 diff --git a/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt b/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt
 index 897c6e5a..0e016323 100644
 --- a/app/src/main/java/com/osfans/trime/ime/keyboard/KeyboardWindow.kt

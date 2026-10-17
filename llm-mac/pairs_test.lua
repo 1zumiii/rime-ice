@@ -12,6 +12,9 @@ rime_api = { get_user_data_dir = function() return tmp end, get_distribution_cod
 local pp = require("personal_pairs")
 local file = tmp .. "/recent_pairs.tsv"
 local T = os.time()
+-- 落盘的时间戳只到分钟：用可调的假时钟，让“更晚的一次使用”真的晚一分钟以上
+local real_time, fake_offset = os.time, 0
+os.time = function() return real_time() + fake_offset end
 
 -- 记录与时间窗
 pp.init()
@@ -78,7 +81,7 @@ local function run(texts, e)
 end
 -- 用户常在「明天」后面选「天气」，也最近用过「天机」（更新）
 commit("明天"); commit("天气"); pp.reset(); commit("明天"); commit("天气")   -- 同一搭配两次
-os.execute("sleep 1")
+fake_offset = fake_offset + 61
 commit("天机")
 commit("天下"); commit("天下")
 local pairs_before = run({ "天启", "天空", "天气", "天机" })

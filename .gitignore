@@ -27,3 +27,9 @@ rime_patch
 !/llm-android/trime/*.custom.yaml
 
 luac.out
+select_stats.tsv*
+select_corpus.tsv*
+select_corpus.part-*
+recent_words.archive*
+recent_pairs.archive*
+*.enabled

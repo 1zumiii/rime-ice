@@ -127,21 +127,51 @@ local function load_llm(env)
     _G.ai_rerank_llm = cpp
 end
 
--- === 选词统计（默认关闭）===
--- 作用：用你自己的真实输入评估重排有没有帮助（原顺序第一位被选中的比例 vs 重排后第一位被选中的比例），
---       并为调参（候选数、二次推理、词对权重）提供依据。
--- 内容：每次选词写一行纯数字到用户目录 select_stats.tsv：时间戳、AI 开关、模型（q = Qwen，s = 学生）、输入字母数、
---       参与重排的候选数、所选候选在原顺序和最终顺序里的位次、上文长度档、候选字数、候选类型、是否命中缓存。
---       不含任何输入的文字、拼音和候选文字。
--- 开关：用户目录里存在空文件 select_stats.enabled 才记录（新开的输入会话生效）；删除该文件即停止，删除 select_stats.tsv 即清空。
+-- === 光标被点动后清空上文（安卓）===
+-- 改版 Trime 发现光标位置变化不是输入法自己的编辑引起的（用户点击或拖动了光标，例如回头补充内容），
+-- 就把运行时选项 ai_ctx_reset 置 true；这里收到后清空上文和个人词对的“前一个词”，避免把别处的词当成当前位置的上文。
+local function setup_ctx_reset(env)
+    env.engine.context.option_update_notifier:connect(function(c, name)
+        if name == "ai_ctx_reset" and c:get_option(name) then
+            c:set_option(name, false)
+            reset_history()
+            local ch = c.commit_history
+            if ch then commit_base = #ch:to_table() end
+            _G.llm_filter_cache = nil
+        end
+    end)
+end
+
+-- === 选词统计与训练语料（默认关闭）===
+-- 一、select_stats.tsv（纯数字）：用真实输入评估重排有没有帮助。开关：用户目录里存在空文件 select_stats.enabled。
+--     每次选词一行：时间戳、AI 开关、模型（q = Qwen，s = 学生）、输入字母数、参与重排的候选数、所选候选在原顺序和最终顺序里的位次、
+--     上文长度档、候选字数、候选类型、是否命中缓存。不含任何输入的文字、拼音和候选文字。
+-- 二、select_corpus.tsv（明文）：为将来微调积累“模型排错”的样本。开关：用户目录里存在空文件 select_corpus.enabled（独立于上一个）。
+--     只记两类：难例（所选候选不是最终顺序的第一位，即模型排错或用户有意选了别的）全记；锚点（选了第一位）按 select_anchor_rate
+--     （默认 0.1）随机抽样，用来防止训练时学成“别选第一位”。每行：id、时间戳（分钟）、输入字母数、上文最后 6 个字、所选词、
+--     最终顺序第一位的词、原顺序第一位的词、类型（hard|anchor）、距上一次上屏的秒数（越大，上文越可能已经不对）、模型。
+--     选词后 3 秒内按退格，会追加一行 revise<Tab>id，表示这条可能选错了。只记含中文的候选，不记英文和数字。
+-- 删除对应的 .enabled 文件即停止记录，删除 tsv 即清空。文件只在本机，不会同步，也不会进入仓库。
+local revise_hook = nil
+local function last_chars(str, n)
+    local len = utf8.len(str)
+    if not len or len == 0 then return "" end
+    local from = math.max(1, len - n + 1)
+    return str:sub(utf8.offset(str, from))
+end
 local function setup_select_stats(env)
     local ud = user_dir()
     if not ud then return end
-    local probe = io.open(ud .. "/select_stats.enabled", "r")
-    if not probe then _G.ai_select_stats_on = false; return end
-    probe:close()
-    _G.ai_select_stats_on = true
-    local path = ud .. "/select_stats.tsv"
+    local function enabled(name)
+        local probe = io.open(ud .. "/" .. name, "r")
+        if probe then probe:close(); return true end
+        return false
+    end
+    local stats_on, corpus_on = enabled("select_stats.enabled"), enabled("select_corpus.enabled")
+    _G.ai_select_stats_on = stats_on or corpus_on     -- 过滤器只在需要时才整理位次信息
+    if not _G.ai_select_stats_on then return end
+    local spath, cpath = ud .. "/select_stats.tsv", ud .. "/select_corpus.tsv"
+    local anchor_rate = env.engine.schema.config:get_double("llm_rerank/select_anchor_rate") or 0.1
     local model_cache, model_ts = "q", 0
     local function model_kind()
         local now = os.time()
@@ -149,13 +179,31 @@ local function setup_select_stats(env)
             model_ts = now
             local llm = _G.ai_rerank_llm
             if llm and llm.status then
-                local ok, s = pcall(llm.status)
-                model_cache = (ok and type(s) == "string" and s:find('"student":true', 1, true)) and "s" or "q"
+                local ok, st = pcall(llm.status)
+                model_cache = (ok and type(st) == "string" and st:find('"student":true', 1, true)) and "s" or "q"
             end
         end
         return model_cache
     end
+    local function append(path, line, limit)
+        local fh = io.open(path, "a")
+        if not fh then return end
+        local size = fh:seek("end")
+        fh:write(line)
+        fh:close()
+        if size and size > limit then
+            if path == cpath then
+                local ok, arc = pcall(require, "corpus_archive")
+                if ok then arc.rotate(path) end            -- 训练语料不丢弃：分卷并压缩
+            else
+                os.rename(path, path .. ".old")
+            end
+        end
+    end
     local last_key, last_t = "", 0
+    local prev_commit_t = os.time()
+    local seq, last_corpus_id, last_corpus_t = 0, nil, 0
+    env.engine.context.commit_notifier:connect(function() prev_commit_t = os.time() end)
     env.engine.context.select_notifier:connect(function(ctx)
         pcall(function()
             local cand = ctx:get_selected_candidate()
@@ -170,23 +218,42 @@ local function setup_select_stats(env)
             local sel = (seg and seg.selected_index or 0) + 1          -- 最终顺序里的位次（从 1 起）
             local ai = ctx:get_option("ai_rerank") and 1 or 0
             local info = _G.ai_select_info
+            local fresh = info and info.input == input
             local o, f, n, s1 = sel, sel, 0, "-"
-            if ai == 1 and info and info.input == input then
+            if ai == 1 and fresh then
                 o, f, n, s1 = info.o[text] or 0, info.f[text] or sel, info.n, info.s1
             end
-            local clen = #get_context():gsub("[\128-\191]", "")        -- 上文的字数
+            local ctx_all = get_context()
+            local clen = utf8.len(ctx_all) or 0
             local bucket = clen == 0 and 0 or clen <= 2 and 1 or clen <= 9 and 2 or 3
-            local fh = io.open(path, "a")
-            if not fh then return end
-            if fh:seek("end") > 2 * 1024 * 1024 then
-                fh:close(); os.rename(path, path .. ".old"); fh = io.open(path, "a")
-                if not fh then return end
+            if stats_on then
+                append(spath, string.format("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+                    now, ai, model_kind(), #input, n, o, f, bucket, utf8.len(text) or 0, tostring(cand.type), s1), 2 * 1024 * 1024)
             end
-            fh:write(string.format("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
-                now, ai, model_kind(), #input, n, o, f, bucket, utf8.len(text) or 0, tostring(cand.type), s1))
-            fh:close()
+            if corpus_on and text:find("[\228-\233][\128-\191][\128-\191]") and (utf8.len(text) or 99) <= 12 then
+                local kind = nil
+                if sel > 1 then kind = "hard" elseif math.random() < anchor_rate then kind = "anchor" end
+                if kind then
+                    seq = seq + 1
+                    local id = string.format("%d-%d", now, seq)
+                    local ft = (fresh and info.ft) or text
+                    local of = (fresh and info.of) or text
+                    append(cpath, string.format("%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+                        id, now - now % 60, #input, last_chars(ctx_all, 6), text, ft, of, kind,
+                        math.min(now - prev_commit_t, 9999), model_kind()), 2 * 1024 * 1024)
+                    last_corpus_id, last_corpus_t = id, now
+                end
+            end
         end)
     end)
+    -- 选词后 3 秒内按退格：给最近一条语料追加“被修改”标记
+    revise_hook = function()
+        if corpus_on and last_corpus_id and os.time() - last_corpus_t <= 3 then
+            local fh = io.open(cpath, "a")
+            if fh then fh:write("revise\t" .. last_corpus_id .. "\n"); fh:close() end
+            last_corpus_id = nil
+        end
+    end
 end
 
 -- === 词频（仅内存，重启即清）===
@@ -235,6 +302,19 @@ local function processor(key, env)
     -- 开关关闭：不加载模型、不记录
     -- 先加载模块（不加载模型）：开关处于关闭状态时，也要把"关"同步给常驻推理进程
     if not llm_prep then load_llm(env) end
+
+    -- 下面两件事与 AI 开关无关，开关关闭时也要做：
+    -- 1) 编辑位置变化键（退格、方向键、回车等，且没有未上屏编码）：个人词对的“前一个词”作废
+    -- 2) 选词后立刻退格：给刚记的那条训练语料打“被修改”标记
+    if ctx.input == "" then
+        local k = key:repr()
+        if is_edit_key(k) then
+            local okp, pp = pcall(require, "personal_pairs")
+            if okp then pcall(pp.reset) end
+            if k == "BackSpace" and revise_hook then pcall(revise_hook) end
+        end
+    end
+
     if not ctx:get_option("ai_rerank") then return 2 end
 
     -- 每次按键刷新“最近使用”时间，避免只打短输入（不触发重排）时被误判为空闲而卸载模型
@@ -296,6 +376,6 @@ end
 
 -- 会话创建时就加载并同步一次开关（之前要等第一次按键才加载：在那之前点安卓徽标切换开关，守护进程收不到，表现为第一次点击失效）
 return setmetatable({
-    init = function(env) pcall(load_llm, env); pcall(setup_select_stats, env) end,
+    init = function(env) pcall(load_llm, env); pcall(setup_ctx_reset, env); pcall(setup_select_stats, env) end,
     func = processor,
 }, { __call = function(_, key, env) return processor(key, env) end })   -- 仍可当函数直接调用（测试脚本这样用）
