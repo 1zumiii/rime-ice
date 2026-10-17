@@ -130,7 +130,7 @@ std::atomic<int>   g_last_score_ms{0}, g_max_score_ms{0};
 std::atomic<long long> g_score_ms_sum{0};
 std::atomic<bool>  g_screen_off{false};
 std::atomic<long long> g_fast_status_until_ms{0};   // 手动切换后一小段时间内加快状态文件的刷新，让面板及时看到加载完成
-std::atomic<bool>  g_enabled{true};      // 手动启停：false = 模型已卸载，拒绝一切推理（进程只剩待命）
+std::atomic<bool>  g_enabled{false};     // 手动启停：false = 模型已卸载，拒绝一切推理（进程只剩待命）。默认关闭，与手机上方案开关 ai_rerank 的默认值一致；Lua 侧同步后才开
 std::atomic<int>   g_idle_normal{1200};
 std::atomic<long long> g_last_req_s{0};
 int                g_listen_fd = -1;

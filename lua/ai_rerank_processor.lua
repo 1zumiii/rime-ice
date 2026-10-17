@@ -232,4 +232,8 @@ local function processor(key, env)
     return 2
 end
 
-return processor
+-- 会话创建时就加载并同步一次开关（之前要等第一次按键才加载：在那之前点安卓徽标切换开关，守护进程收不到，表现为第一次点击失效）
+return setmetatable({
+    init = function(env) pcall(load_llm, env) end,
+    func = processor,
+}, { __call = function(_, key, env) return processor(key, env) end })   -- 仍可当函数直接调用（测试脚本这样用）

@@ -84,7 +84,7 @@ index e9ad49d6..00d73042 100644
              if (BuildConfig.DEBUG) {
                  Timber.plant(
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt b/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
-index 0867126c..77d6c69d 100644
+index 0867126c..ae9e5194 100644
 --- a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
 @@ -28,6 +28,7 @@ import com.osfans.trime.data.db.ClipboardHelper
@@ -95,18 +95,19 @@ index 0867126c..77d6c69d 100644
  import com.osfans.trime.ime.bar.ui.AlwaysUi
  import com.osfans.trime.ime.bar.ui.CandidateUi
  import com.osfans.trime.ime.bar.ui.TabUi
-@@ -132,7 +133,10 @@ class InputBarDelegate(override val di: DI) :
- 
-     private val alwaysUi: AlwaysUi by lazy {
-         AlwaysUi(context, scope) { action ->
--            if (action.isNotEmpty()) {
-+            if (action == AiStatusButtonAction.TOGGLE) {
-+                // AI 重排手动启停：切方案开关 ai_rerank，Lua 侧会把它同步给常驻推理进程
-+                service.postRimeJob { setRuntimeOption("ai_rerank", !getRuntimeOption("ai_rerank")) }
-+            } else if (action.isNotEmpty()) {
-                 commonKeyboardActionListener.listener.onAction(theme.resolveAction(action))
-             } else {
+@@ -138,6 +139,12 @@ class InputBarDelegate(override val di: DI) :
                  windowManager.attachWindow(SwitchOptionWindow(di))
+             }
+         }.apply {
++            // AI 重排手动启停：先读方案开关 ai_rerank 的真实值，再设成相反的；Lua 侧会把它同步给常驻推理进程
++            aiToggle = {
++                val target = !rime.run { getRuntimeOption("ai_rerank") }
++                service.postRimeJob { setRuntimeOption("ai_rerank", target) }
++                target
++            }
+             hideKeyboardButton.apply {
+                 setOnClickListener { service.requestHideSelf(0) }
+                 onSwipe = swipeDownHideKeyboardCallback
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiDaemonLauncher.kt
 new file mode 100644
 index 00000000..8c6d5911
@@ -255,10 +256,10 @@ index 00000000..8c6d5911
 +}
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
 new file mode 100644
-index 00000000..c78d770f
+index 00000000..743670c0
 --- /dev/null
 +++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AiStatusButton.kt
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,238 @@
 +/*
 + * SPDX-FileCopyrightText: 2026 1zumiii
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -289,7 +290,8 @@ index 00000000..c78d770f
 + * 点一下：开/关（立刻有触感和动画，开启时黄色闪烁直到模型加载完成）；长按：看详情。
 + * 从没部署过守护进程（文件不存在）时不显示。
 + */
-+class AiStatusButton(context: Context, private val onToggle: () -> Unit) : TextView(context) {
++/** [onToggle] 执行切换并返回切换后的目标状态（以输入法方案开关的真实值为准，不看徽标当前显示什么）。 */
++class AiStatusButton(context: Context, private val onToggle: () -> Boolean) : TextView(context) {
 +    private val handler = Handler(Looper.getMainLooper())
 +    private var detail = ""
 +
@@ -322,13 +324,11 @@ index 00000000..c78d770f
 +                startDaemon(userInitiated = true)
 +                return@setOnClickListener
 +            }
-+            // 目标 = 当前显示状态的反面（灰色的「已关闭」之外都算开着）
-+            val target = text.toString() == "○ AI"
++            val target = onToggle()
 +            pendingTarget = target
 +            pendingUntil = SystemClock.uptimeMillis() + PENDING_MS
 +            pop()
 +            if (target) show(YELLOW, "AI 重排：开启中，正在加载模型…", "◐ AI") else show(GRAY, "AI 重排：关闭中…", "○ AI")
-+            onToggle()
 +            handler.removeCallbacks(tick)
 +            handler.postDelayed(tick, FAST_MS)
 +        }
@@ -499,7 +499,7 @@ index 00000000..c78d770f
 +    }
 +}
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt b/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
-index 319e436a..c6e810aa 100644
+index 319e436a..46f0368c 100644
 --- a/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/bar/ui/AlwaysUi.kt
 @@ -26,6 +26,7 @@ import splitties.views.dsl.core.Ui
@@ -510,17 +510,18 @@ index 319e436a..c6e810aa 100644
  import timber.log.Timber
  
  class AlwaysUi(
-@@ -82,6 +83,9 @@ class AlwaysUi(
+@@ -82,6 +83,10 @@ class AlwaysUi(
          R.drawable.ic_baseline_more_horiz_24,
      )
  
 +    // AI 重排守护进程状态：紧靠左侧按钮（没部署守护进程时自动隐藏）
-+    private val aiStatusButton = AiStatusButton(ctx) { onButtonClick?.invoke(AiStatusButtonAction.TOGGLE) }
++    var aiToggle: (() -> Boolean)? = null
++    private val aiStatusButton = AiStatusButton(ctx) { aiToggle?.invoke() ?: false }
 +
      private val animator =
          ViewAnimator(ctx).apply {
              add(buttonsUi.root, lParams(matchParent, matchParent))
-@@ -107,10 +111,17 @@ class AlwaysUi(
+@@ -107,10 +112,17 @@ class AlwaysUi(
                  centerVertically()
              },
          )
@@ -539,7 +540,7 @@ index 319e436a..c6e810aa 100644
                  before(rightMostButton)
                  endOfParent()
                  centerVertically()
-@@ -129,7 +140,7 @@ class AlwaysUi(
+@@ -129,7 +141,7 @@ class AlwaysUi(
      fun toggleOptions(): Set<String> = buildSet {
          leftMostButton.option?.let { add(it) }
          buttonsUi.firstButton?.option?.let { add(it) }
