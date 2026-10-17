@@ -1,6 +1,6 @@
 #!/bin/bash
 # 把本仓库的 Rime 配置推送到手机上的 Trime（同文输入法）并触发部署。
-# 前提：手机已用 adb 连接，Trime 已安装并走完首次启动引导（引导里选「使用应用专属存储空间」）。
+# 前提：手机已用 adb 连接，Trime 已安装并走完首次启动引导（引导里选「使用应用专属存储空间」），部署时手机亮屏并弹出键盘（输入法服务运行时才会响应部署广播）。
 # 用法：llm-android/deploy_trime.sh [--with-gram] [--dry-run]
 #   --with-gram  同时推送语法模型 wanxiang-lts-zh-hans.gram（约 380 MB，默认从 ~/Library/Rime 取；已存在且大小一致则跳过）
 #   --dry-run    只列出会推送的文件，不改动手机
@@ -61,11 +61,16 @@ if [[ $WITH_GRAM -eq 1 ]]; then
   if [[ "$WANT" == "$HAVE" ]]; then echo "语法模型已在手机上（大小一致），跳过"; else "$ADB" push "$GRAM" "$DEST"/ | tail -1; fi
 fi
 
-# 触发部署（Trime 自带的广播接收器）并等待编译产物
+# 触发部署（Trime 自带的广播接收器）并等待编译产物。
+# 注意：接收器只在输入法服务运行时才响应，也就是手机上要先弹出过键盘；否则广播被忽略，下面会一直等到超时。
+if ! "$ADB" shell "pidof $PKG" | grep -q '[0-9]'; then
+  echo ">>> 手机上 Trime 进程没有在运行：请在手机上打开任意输入框，把键盘弹出来，部署才会开始"
+fi
 "$ADB" shell "rm -f $DEST/build/rime_ice.table.bin"   # 强制重新编译词库
 "$ADB" shell "am broadcast -a $PKG.action.DEPLOY -p $PKG" | tail -1
 for i in $(seq 1 90); do
   sleep 2
+  [[ $i -eq 8 ]] && echo ">>> 还没开始部署：请确认手机亮屏，并在任意输入框里弹出键盘（输入法服务运行时才会响应）"
   "$ADB" shell "test -f $DEST/build/rime_ice.table.bin && test -f $DEST/build/rime_ice.prism.bin" && { echo "部署完成（约 $((i*2)) 秒）"; exit 0; }
 done
 echo "等了 3 分钟还没有编译产物，请看 adb logcat | grep rime.trime"; exit 1
