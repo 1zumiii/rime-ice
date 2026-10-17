@@ -160,6 +160,10 @@ function M.func(input, env)
         if ELIGIBLE[cand.type] then
             local e = env.words[cand.text]
             local pe = prev and env.pp.eff(prev, cand.text, now) or 0
+            if prev then
+                local ce = env.pp.choice_eff(prev, code, cand.text, now)
+                if ce * 1.5 > pe then pe = ce * 1.5 end   -- 纠错记忆：用户在这个情境下选过它，优先级不低于词对
+            end
             local recent = e and e.count >= env.min_count and now - e.last <= env.window
             if recent or pe >= env.min_pair then
                 picked[#picked + 1] = { pos = i, last = e and e.last or 0, count = e and e.count or 0,

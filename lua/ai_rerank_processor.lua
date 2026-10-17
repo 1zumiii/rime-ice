@@ -142,10 +142,35 @@ local function setup_ctx_reset(env)
     end)
 end
 
+-- === 纠错记忆（默认开启，本机，见 personal_pairs.lua）===
+-- 在“前一个词 + 输入的拼音”这个情境下，记下用户选了哪个词：选了非首位的权重 2.0（明确的纠正），选了首位的 0.5。
+-- 之后同样的情境再出现，ai_rerank_filter 和 recent_boost_filter 会让用户选过的词优先。记录在 recent_choices.tsv。
+local function setup_choice_memory(env)
+    local okp, pp = pcall(require, "personal_pairs")
+    if not okp then return end
+    pcall(pp.init)
+    env.engine.context.select_notifier:connect(function(ctx)
+        pcall(function()
+            local input = ctx.input or ""
+            if not input:match("^[a-z]+$") then return end
+            local cand = ctx:get_selected_candidate()
+            if not cand then return end
+            local e, st = cand._end, cand._start
+            if type(e) == "number" and e - (type(st) == "number" and st or 0) < #input then return end   -- 只选了前半截：不记
+            local prev = pp.prev()
+            if not prev then return end
+            local seg = ctx.composition:back()
+            local sel = (seg and seg.selected_index or 0) + 1
+            pp.record_choice(prev, input, cand.text or "", sel > 1 and 2.0 or 0.5)
+        end)
+    end)
+end
+
 -- === 选词统计与训练语料（默认关闭）===
 -- 一、select_stats.tsv（纯数字）：用真实输入评估重排有没有帮助。开关：用户目录里存在空文件 select_stats.enabled。
 --     每次选词一行：时间戳、AI 开关、模型（q = Qwen，s = 学生）、输入字母数、参与重排的候选数、所选候选在原顺序和最终顺序里的位次、
---     上文长度档、候选字数、候选类型、是否命中缓存。不含任何输入的文字、拼音和候选文字。
+--     上文长度档、候选字数、候选类型、是否命中缓存，以及置信度门控用的三列：模型首位比原首位高出的融合分（×10 取整，没有则为 -）、
+--     是否被门控保持了原顺序、模型首位在原顺序里的位次。不含任何输入的文字、拼音和候选文字。
 -- 二、select_corpus.tsv（明文）：为将来微调积累“模型排错”的样本。开关：用户目录里存在空文件 select_corpus.enabled（独立于上一个）。
 --     只记两类：难例（所选候选不是最终顺序的第一位，即模型排错或用户有意选了别的）全记；锚点（选了第一位）按 select_anchor_rate
 --     （默认 0.1）随机抽样，用来防止训练时学成“别选第一位”。每行：id、时间戳（分钟）、输入字母数、上文最后 6 个字、所选词、
@@ -220,15 +245,19 @@ local function setup_select_stats(env)
             local info = _G.ai_select_info
             local fresh = info and info.input == input
             local o, f, n, s1 = sel, sel, 0, "-"
+            local mg10, gated, mtop = "-", 0, 0
             if ai == 1 and fresh then
                 o, f, n, s1 = info.o[text] or 0, info.f[text] or sel, info.n, info.s1
+                if info.mg then mg10 = math.max(-99, math.min(99, math.floor(info.mg * 10 + 0.5))) end
+                gated, mtop = info.gated or 0, info.mtop or 0
             end
             local ctx_all = get_context()
             local clen = utf8.len(ctx_all) or 0
             local bucket = clen == 0 and 0 or clen <= 2 and 1 or clen <= 9 and 2 or 3
             if stats_on then
-                append(spath, string.format("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
-                    now, ai, model_kind(), #input, n, o, f, bucket, utf8.len(text) or 0, tostring(cand.type), s1), 2 * 1024 * 1024)
+                append(spath, string.format("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%d\n",
+                    now, ai, model_kind(), #input, n, o, f, bucket, utf8.len(text) or 0, tostring(cand.type), s1,
+                    tostring(mg10), gated, mtop), 2 * 1024 * 1024)
             end
             if corpus_on and text:find("[\228-\233][\128-\191][\128-\191]") and (utf8.len(text) or 99) <= 12 then
                 local kind = nil
@@ -376,6 +405,6 @@ end
 
 -- 会话创建时就加载并同步一次开关（之前要等第一次按键才加载：在那之前点安卓徽标切换开关，守护进程收不到，表现为第一次点击失效）
 return setmetatable({
-    init = function(env) pcall(load_llm, env); pcall(setup_ctx_reset, env); pcall(setup_select_stats, env) end,
+    init = function(env) pcall(load_llm, env); pcall(setup_ctx_reset, env); pcall(setup_choice_memory, env); pcall(setup_select_stats, env) end,
     func = processor,
 }, { __call = function(_, key, env) return processor(key, env) end })   -- 仍可当函数直接调用（测试脚本这样用）

@@ -130,5 +130,33 @@ local gz = io.popen("ls '" .. tmp .. "' | grep -c 'recent_words.archive-.*\\.tsv
 check("超过 512 KB 后分卷并压缩成 .gz", gz == 1, tostring(gz))
 check("分卷后新的归档从空开始", (count_lines(tmp .. "/recent_words.archive.tsv") or 0) == 0)
 
+
+-- ===== 纠错记忆 =====
+pp._reset_all()
+os.remove(file); os.remove(tmp .. "/recent_choices.tsv")
+pp.init()
+pp.record_choice("明天", "tianqi", "天气", 2.0, T)
+check("纠错记忆：命中", pp.choice_eff("明天", "tianqi", "天气", T) > 1.9)
+check("纠错记忆：别的情境为 0", pp.choice_eff("昨天", "tianqi", "天气", T) == 0 and pp.choice_eff("明天", "tianqi", "天机", T) == 0)
+pp.record_choice("明天", "Tianqi", "天气", 2.0, T)
+pp.record_choice("明天", "t", "天", 2.0, T)
+check("纠错记忆：大写输入和单字母输入不记", pp.choice_eff("明天", "Tianqi", "天气", T) == 0 and count_lines(tmp .. "/recent_choices.tsv") == 1)
+pp.record_choice("明天", "tianqi", "天气", 0.5, T + 5)
+check("纠错记忆：重复选择累加", pp.choice_eff("明天", "tianqi", "天气", T + 5) > 2.3)
+pp._reset_all(); pp.init()
+check("纠错记忆：重启后读回", pp.choice_eff("明天", "tianqi", "天气", T + 5) > 2.0)
+check("纠错记忆：衰减（30 天后约 1/e）", math.abs(pp.choice_eff("明天", "tianqi", "天气", T + 30 * 86400) / pp.choice_eff("明天", "tianqi", "天气", T) - math.exp(-1)) < 0.05)
+-- recent_boost：纠错记忆让候选优先（AI 关闭时）
+pp._reset_all(); os.remove(file); os.remove(tmp .. "/recent_words.tsv"); os.remove(tmp .. "/recent_choices.tsv")
+M.fini(env2)
+conf["rbf/pairs"] = true
+local env9 = { name_space = "rbf", engine = env.engine }
+M.init(env9)
+ctx.input = "tianqi"
+pp.record("明天", os.time())
+pp.record_choice("明天", "tianqi", "天机", 2.0)
+local outc = run({ "天启", "天空", "天气", "天机" }, env9)
+check("纠错记忆让所选词排到靠前位置", outc[2] == "天机", table.concat(outc, ","))
+
 print(fails == 0 and "全部通过" or ("失败 " .. fails))
 os.exit(fails == 0 and 0 or 1)

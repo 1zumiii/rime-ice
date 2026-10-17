@@ -4,9 +4,15 @@
   llm_rerank/stage2: false
   # 轻量档：手机 CPU 上实测（空闲时，新候选打分）：5 个候选 p50≈118 ms / 最大 217 ms；3 个候选 p50≈78 ms / 最大 124 ms。
   # 上文 token 10→6 缩短上屏后的后台预解码（耗电发热的大头）。
-  llm_rerank/max_candidates: 6
+  llm_rerank/max_candidates: 8
   llm_rerank/max_tokens: 6
   # 手动启停（点工具栏的 AI 徽标）：不自动卸载，开着就一直在线；关闭时模型立刻卸载、推理进程只剩待命。
   llm_rerank/idle_unload_minutes: 0
+  # 简拼和短输入（2 个字母起）也参与重排；学生模型打分只要十几毫秒
+  llm_rerank/code_pattern: '[a-z]{2,}'
+  # 置信度门控：模型首位比 Rime 原首位的融合分高出至少这么多才换；简拼的候选多，门槛更高。
+  # 初值是估计，等选词统计攒够数据后按 select_stats_report 里的 margin 分桶结果调整
+  llm_rerank/gate_margin: 0.5
+  llm_rerank/gate_margin_short: 1.5
   # 新装默认关闭 AI：手机上要手动开（点工具栏的 AI 徽标）。开关的 reset 默认值在 deploy_trime.sh 里改（Rime 的补丁键按字母序处理，
   # 这里没法可靠地引用刚追加的开关）；用户的选择由 default.overlay.yaml 里的 save_options 记住。

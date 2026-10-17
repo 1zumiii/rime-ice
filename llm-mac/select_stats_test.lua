@@ -46,15 +46,16 @@ io.open(tmp .. "/select_stats.enabled", "w"):close()
 env, fire = mk_env("精力", 0, true, "jingli")
 mod.init(env)
 check("有开关文件时开启", _G.ai_select_stats_on == true)
-_G.ai_select_info = { input = "jingli", o = { ["经理"] = 1, ["经历"] = 2, ["精力"] = 3 }, f = { ["精力"] = 1, ["经历"] = 2, ["经理"] = 3 }, n = 3, s1 = "miss", s2 = "-" }
+_G.ai_select_info = { input = "jingli", o = { ["经理"] = 1, ["经历"] = 2, ["精力"] = 3 }, f = { ["精力"] = 1, ["经历"] = 2, ["经理"] = 3 }, n = 3, s1 = "miss", s2 = "-", mg = 1.234, gated = 0, mtop = 3 }
 fire()
 local ls = read_lines()
 check("写了一行", #ls == 1)
 local f = {}
 for x in (ls[1] or ""):gmatch("[^\t]+") do f[#f + 1] = x end
-check("11 列", #f == 11, tostring(#f))
+check("14 列", #f == 14, tostring(#f))
 check("AI 开、输入 6 个字母、候选 3 个", f[2] == "1" and f[4] == "6" and f[5] == "3")
 check("原顺序第 3 位，最终第 1 位", f[6] == "3" and f[7] == "1")
+check("门控三列：margin×10、未门控、模型首位原位次 3", f[12] == "12" and f[13] == "0" and f[14] == "3", tostring(f[12]) .. "," .. tostring(f[13]) .. "," .. tostring(f[14]))
 check("整行不含汉字和拼音", not (ls[1] or ""):find("[\128-\255]") and not (ls[1] or ""):find("jingli"))
 -- 3) 同一次选择重复通知只记一次
 fire()

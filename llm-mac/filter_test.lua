@@ -114,6 +114,23 @@ do
   check("B. badge on first", ys[1].comment:find("◇", 1, true) ~= nil, ys[1].comment)
 end
 
+-- B2: 置信度门控与纠错记忆
+do
+  local cfgref = _G.ai_rerank_cfg
+  local cands = { mk("经理", 0, 6), mk("经历", 0, 6), mk("精力", 0, 6), mk("敬礼", 0, 6), mk("警力", 0, 6) }
+  cfgref.gate_margin = 100
+  local texts = run(mk_env("jingli", hist, true), cands)
+  check("B2. 门控很严时保持 Rime 原顺序", texts[1] == "经理", table.concat(texts, ","))
+  local pp = require("personal_pairs")
+  pp._reset_all(); pp.init(ud .. "/recent_pairs.tsv")
+  pp.record("他在公司当", os.time())
+  pp.record_choice("他在公司当", "jingli", "精力", 2.0)
+  texts = run(mk_env("jingli", hist, true), cands)
+  check("B2. 纠错记忆命中的候选不受门控限制", texts[1] == "精力", table.concat(texts, ","))
+  cfgref.gate_margin = 0
+  pp._reset_all()
+end
+
 -- C: 上文为空 → 不重排（原样）
 do
   hist = {}
@@ -254,7 +271,8 @@ do
   local p = io.popen("ls '" .. ud .. "' 2>/dev/null"); local ls = p:read("*a"); p:close()
   local bad = {}
   for name in ls:gmatch("[^\n]+") do
-    if not (name == "lua" or name == "rime_llm_log.txt") then bad[#bad + 1] = name end
+    -- recent_choices.tsv 是本测试里直接调用纠错记忆接口（B2）写的，不是重排模块写的
+    if not (name == "lua" or name == "rime_llm_log.txt" or name == "recent_choices.tsv") then bad[#bad + 1] = name end
   end
   check("H. only expected files in user dir", #bad == 0, table.concat(bad, ","))
   local f = io.open(ud .. "/rime_llm_log.txt"); local log = f and f:read("*a") or ""; if f then f:close() end

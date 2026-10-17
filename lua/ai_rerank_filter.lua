@@ -12,6 +12,10 @@
 --   expected_length_weight  预期词长加成，全拼设 0（默认 0）
 --   freq_beta               词频融合系数，默认 1.5
 --   pair_gamma              个人词对融合系数（前一个词 → 当前词，见 personal_pairs.lua），默认 1.5，0 = 关闭
+--   corr_gamma              纠错记忆融合系数（前一个词 + 输入的拼音 → 你选过的词），默认 3.0，0 = 关闭
+--   gate_margin             置信度门控：模型选出的首位比 Rime 原首位的融合分高出至少这么多才换；否则保持原顺序，默认 0（关闭）。
+--                           有纠错记忆命中的候选不受门控限制
+--   gate_margin_short       输入只有 1~2 个字母时用的门控值（简拼的候选多，更需要谨慎），默认 0（关闭）
 --   scan_limit              只在前 N 个候选里重排，其余惰性透传，默认 80
 --   stage2                  四字两阶段总开关，默认 true
 --   stage2_context_chars    第二阶段只用最后 N 个字作为上文，默认 8（现场解码，越短越快）
@@ -25,6 +29,9 @@ local cfg = {
     expected_length_weight = 0,
     freq_beta = 1.5,
     pair_gamma = 1.5,
+    corr_gamma = 3.0,
+    gate_margin = 0,
+    gate_margin_short = 0,
     scan_limit = 80,
     stage2 = true,              -- 四字两阶段总开关；怀疑它有问题时设为 false
     stage2_context_chars = 8,   -- 第二阶段只用「上文+第一阶段选中词」的最后 N 个字，解码更快
@@ -33,6 +40,8 @@ local cfg = {
     badge2 = "◈",      -- 两阶段拼出来的首选（四字 = 两个两字词）
     debug_latency = false,
 }
+
+_G.ai_rerank_cfg = cfg   -- 供测试脚本在运行中调整配置
 
 -- 结果缓存：同一 (上文, 输入) 的评分复用（翻页/候选窗重建不重复推理）。
 -- 存 _G 以便 ai_rerank_processor 在编辑操作后清空。
@@ -43,6 +52,13 @@ local okpp, pp = pcall(require, "personal_pairs")
 local function pair_eff(prev, w)
     if not okpp or not prev or cfg.pair_gamma <= 0 then return 0 end
     local ok, v = pcall(pp.eff, prev, w)
+    return (ok and v) or 0
+end
+
+-- 纠错记忆：在“前一个词 + 输入的拼音”下你选过这个词的衰减计数
+local function choice_eff(prev, input, w)
+    if not okpp or not prev or cfg.corr_gamma <= 0 then return 0 end
+    local ok, v = pcall(pp.choice_eff, prev, input, w)
     return (ok and v) or 0
 end
 
@@ -75,6 +91,12 @@ local function init_config(env)
     if v ~= nil then cfg.freq_beta = math.max(0, v) end
     v = get_config_number(sc, "llm_rerank/pair_gamma")
     if v ~= nil then cfg.pair_gamma = math.max(0, v) end
+    v = get_config_number(sc, "llm_rerank/corr_gamma")
+    if v ~= nil then cfg.corr_gamma = math.max(0, v) end
+    v = get_config_number(sc, "llm_rerank/gate_margin")
+    if v ~= nil then cfg.gate_margin = math.max(0, v) end
+    v = get_config_number(sc, "llm_rerank/gate_margin_short")
+    if v ~= nil then cfg.gate_margin_short = math.max(0, v) end
     v = sc:get_int("llm_rerank/max_candidates")
     if v then cfg.max_candidates = v end
     v = sc:get_int("llm_rerank/scan_limit")
@@ -382,7 +404,8 @@ local function inner(translation, env)
         local fused_scores = nil
         if #ordered > 1 and scores then
             local freq_eff = _G.ai_rerank_freq_eff
-            local prev_word = okpp and cfg.pair_gamma > 0 and pp.prev() or nil
+            local prev_any = okpp and pp.prev() or nil
+            local prev_word = cfg.pair_gamma > 0 and prev_any or nil
             fused_scores = {}
             local arr = {}
             for i, c in ipairs(ordered) do
@@ -391,6 +414,7 @@ local function inner(translation, env)
                     local n = freq_eff and freq_eff(c.text) or 0
                     local t = s + cfg.freq_beta * math.log(1 + n)
                         + cfg.pair_gamma * math.log(1 + pair_eff(prev_word, c.text))
+                        + cfg.corr_gamma * math.log(1 + choice_eff(prev_any, input, c.text))
                     fused_scores[c.text] = t
                     arr[i] = { c = c, t = t, idx = i }
                 else
@@ -403,6 +427,28 @@ local function inner(translation, env)
                 return a.idx < b.idx
             end)
             for i = 1, #arr do ordered[i] = arr[i].c end
+            -- 置信度门控：模型选出的首位只有比 Rime 原首位高出足够多才换，否则保持原顺序
+            -- （纠错记忆命中的候选不受限制：用户明确选过的优先）。margin 和模型首位的原位次记入选词统计。
+            local orig_first = full[1]
+            local t0 = orig_first and fused_scores[orig_first.text]
+            if orig_first and t0 and t0 > -math.huge and arr[1] then
+                local margin = arr[1].t - t0
+                flags.mg = margin
+                local pos = {}
+                for i, tx in ipairs(cands) do pos[tx] = i end
+                flags.mtop = pos[arr[1].c.text] or 0
+                local need = (#input <= 2) and cfg.gate_margin_short or cfg.gate_margin
+                if need > 0 and arr[1].c.text ~= orig_first.text and margin < need then
+                    local remembered = false
+                    for _, a in ipairs(arr) do
+                        if choice_eff(prev_any, input, a.c.text) >= 1.0 then remembered = true; break end
+                    end
+                    if not remembered then
+                        table.sort(ordered, function(a, b) return (pos[a.text] or 99) < (pos[b.text] or 99) end)
+                        flags.gated = 1
+                    end
+                end
+            end
         end
         -- 预期词长加权：两码一字方案才有意义，全拼保持 0（默认）
         if cfg.expected_length_weight > 0 and #ordered > 1 and fused_scores then
@@ -537,7 +583,8 @@ return function(translation, env)
         for i, c in ipairs(cap) do if not fpos[c.text] then fpos[c.text] = i end end
         _G.ai_select_info = { input = env.engine.context.input or "", o = o, f = fpos, n = #native,
                               s1 = flags.s1 or "-", s2 = flags.s2 or "-",
-                              ft = cap[1] and cap[1].text or "", of = native[1] and native[1].text or "" }
+                              ft = cap[1] and cap[1].text or "", of = native[1] and native[1].text or "",
+                              mg = flags.mg, gated = flags.gated or 0, mtop = flags.mtop or 0 }
     end
 
     if cfg.debug_latency then
