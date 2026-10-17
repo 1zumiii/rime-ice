@@ -6,7 +6,7 @@
 --   max_boost     最多提升几个词，默认 2
 --   scan          只在前 scan 个候选里找，默认 40
 --   min_count     窗口内至少用过几次才提升，默认 1
---   max_records   记录文件最多保留的使用记录数，默认 3000
+--   max_records   活动记录文件最多保留的使用记录数，默认 3000；更早的记录移到归档，不丢弃
 --   pairs         是否启用个人词对（前一个词 → 当前词，见 personal_pairs.lua），默认 true
 --   min_pair      词对计数至少多大才提升，默认 1.5（至少要重复出现两次左右；单次的偶然搭配或误选不会被提升）
 -- 使用记录保存在用户目录的 recent_words.tsv（每行：时间戳<Tab>词），不属于仓库，安装脚本会保留它。
@@ -57,9 +57,18 @@ local function load_records(path, window_start)
     return words, raw
 end
 
--- 记录过多时只保留最新的 max_records 条
+-- 记录过多时只保留最新的 max_records 条；被挤出的旧记录先追加到归档（recent_words.archive.tsv，见 corpus_archive.lua），
+-- 归档写成功后才改写活动文件，所以不会丢记录。
 local function compact(path, raw, max_records)
     if #raw <= max_records then return end
+    local ok_arc, arc = pcall(require, "corpus_archive")
+    if ok_arc then
+        local dropped = {}
+        for i = 1, #raw - max_records do
+            dropped[#dropped + 1] = string.format("%d\t%s", raw[i][1], raw[i][2])
+        end
+        if not arc.append(path, dropped) then return end   -- 归档写不进去就先不截断
+    end
     local f = io.open(path, "w")
     if not f then return end
     for i = #raw - max_records + 1, #raw do

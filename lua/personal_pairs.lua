@@ -1,6 +1,7 @@
 -- personal_pairs.lua — 个人词对记录：前一个词 → 当前词 的使用次数（带时间衰减）
 -- 由 recent_boost_filter 在每次上屏时记录，由 recent_boost_filter 和 ai_rerank_filter 查询。
 -- 记录保存在用户目录的 recent_pairs.tsv（每行：时间戳<Tab>前一个词<Tab>当前词），明文，不属于仓库，不联网。
+-- 超出 90 天或 6000 条的旧记录不丢弃，移到 recent_pairs.archive.tsv（见 corpus_archive.lua）。
 -- 清空个人词对：删除该文件后重新部署即可。
 -- 「前一个词」只在上一次上屏后 GAP 秒内有效；编辑键（退格、方向键等）由 ai_rerank_processor 调 reset() 清掉。
 
@@ -51,22 +52,29 @@ function M.init(file_path)
     local f = io.open(path, "r")
     if not f then return end
     local now = os.time()
-    local keep = {}
+    local keep, old = {}, {}
     for line in f:lines() do
         local ts, a, b = line:match("^(%d+)\t([^\t]+)\t([^\t]+)$")
         ts = tonumber(ts)
-        if ts and now - ts <= WINDOW then keep[#keep + 1] = { ts, a, b } end
+        if ts then
+            if now - ts <= WINDOW then keep[#keep + 1] = { ts, a, b } else old[#old + 1] = line end
+        end
     end
     f:close()
     local first = math.max(1, #keep - MAX_RECORDS + 1)
     for i = first, #keep do bump(keep[i][2], keep[i][3], keep[i][1]) end
-    if #keep > MAX_RECORDS then
-        local tmp = path .. ".tmp"
-        local out = io.open(tmp, "w")
-        if out then
-            for i = first, #keep do out:write(string.format("%d\t%s\t%s\n", keep[i][1], keep[i][2], keep[i][3])) end
-            out:close()
-            os.rename(tmp, path)
+    -- 超出 90 天窗口或超出条数上限的旧记录移到归档（recent_pairs.archive.tsv），写成功后才改写活动文件
+    if #old > 0 or #keep > MAX_RECORDS then
+        for i = 1, first - 1 do old[#old + 1] = string.format("%d\t%s\t%s", keep[i][1], keep[i][2], keep[i][3]) end
+        local ok_arc, arc = pcall(require, "corpus_archive")
+        if ok_arc and arc.append(path, old) then
+            local tmp = path .. ".tmp"
+            local out = io.open(tmp, "w")
+            if out then
+                for i = first, #keep do out:write(string.format("%d\t%s\t%s\n", keep[i][1], keep[i][2], keep[i][3])) end
+                out:close()
+                os.rename(tmp, path)
+            end
         end
     end
 end

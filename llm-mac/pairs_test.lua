@@ -94,5 +94,38 @@ M.fini(env); M.init(env2)
 commit("明天")
 local out2 = run({ "天启", "天空", "天气", "天机" }, env2)
 check("pairs=false 回到按最近使用", out2[2] == "天机", table.concat(out2, ","))
+
+-- 归档：被挤出的旧记录移到 archive，不丢
+local function count_lines(path) local n = 0; local f = io.open(path, "r"); if not f then return nil end; for _ in f:lines() do n = n + 1 end; f:close(); return n end
+-- (a) 个人词对：前面“超量压缩”那一段已把 100 天前的 1 条和超出的 100 条挤出
+-- （该段文件已被后续测试覆盖，这里重新造一份）
+pp._reset_all()
+os.remove(file); os.remove(tmp .. "/recent_pairs.archive.tsv")
+f = io.open(file, "w")
+f:write(string.format("%d\t旧\t词\n", T - 100 * 86400))
+for i = 1, 6100 do f:write(string.format("%d\t甲%d\t乙\n", T - 10, i)) end
+f:close()
+pp.init()
+check("词对：活动文件 6000 条", count_lines(file) == 6000, tostring(count_lines(file)))
+check("词对：归档 101 条（100 天前 1 条加超量 100 条）", count_lines(tmp .. "/recent_pairs.archive.tsv") == 101, tostring(count_lines(tmp .. "/recent_pairs.archive.tsv")))
+-- (b) 最近使用：3500 条里挤出最旧的 500 条
+os.remove(tmp .. "/recent_words.tsv"); os.remove(tmp .. "/recent_words.archive.tsv")
+local wf = io.open(tmp .. "/recent_words.tsv", "w")
+for i = 1, 3500 do wf:write(string.format("%d\t词%d\n", T - 3600 + i, i)) end
+wf:close()
+M.fini(env2); M.init(env2)
+check("最近使用：活动文件 3000 条", count_lines(tmp .. "/recent_words.tsv") == 3000, tostring(count_lines(tmp .. "/recent_words.tsv")))
+check("最近使用：归档 500 条", count_lines(tmp .. "/recent_words.archive.tsv") == 500, tostring(count_lines(tmp .. "/recent_words.archive.tsv")))
+local first_line = io.open(tmp .. "/recent_words.tsv", "r"):read("l")
+check("活动文件保留的是最新的", first_line:find("词501", 1, true) ~= nil, first_line)
+-- (c) 归档超过 512 KB：分卷并压缩
+local arc = require("corpus_archive")
+local big = {}
+for i = 1, 40000 do big[i] = string.format("%d\t词%d", T, i) end
+check("归档写入成功", arc.append(tmp .. "/recent_words.tsv", big))
+local gz = io.popen("ls '" .. tmp .. "' | grep -c 'recent_words.archive-.*\\.tsv\\.gz$'"):read("n")
+check("超过 512 KB 后分卷并压缩成 .gz", gz == 1, tostring(gz))
+check("分卷后新的归档从空开始", (count_lines(tmp .. "/recent_words.archive.tsv") or 0) == 0)
+
 print(fails == 0 and "全部通过" or ("失败 " .. fails))
 os.exit(fails == 0 and 0 or 1)
