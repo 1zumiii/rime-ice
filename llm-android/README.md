@@ -106,6 +106,16 @@ Trime（改版 APK）                              rimellmd（shell 身份，由
 
 **更换签名密钥须先卸载原有的 Trime。** 卸载会清空其数据目录，应事先备份用户词库。
 
+## 手机端配置更新
+
+改版 Trime 在工具栏左侧三个点打开的面板里提供“从仓库更新”入口（与原有的“更新配置”不同，后者只是重新部署本地配置），打开后可填写仓库地址与分支（默认 `1zumiii/rime-ice-Custom` 的 `custom` 分支），点击“立即更新”即完成下载、覆盖和重新部署。
+
+- 地址格式：`https://github.com/用户/仓库`、`用户/仓库`、`.../tree/分支`，或直接给 `.zip` 链接。仓库须公开。
+- 覆盖范围与 `deploy_trime.sh` 一致：排除其他平台文件、文档、构建产物、个人数据和大模型；`llm-android/trime/*.overlay.yaml` 追加到同名 `.custom.yaml`，`llm-android/trime/*.custom.yaml`（主题补丁）直接放入用户目录；新装默认关闭 AI 的处理也一并执行。
+- 备份与回退：覆盖前把将被改动的文件备份到应用私有目录，只保留上一个版本。更新后 45 秒内进程被重启两次（即连续崩溃两次）自动回退，部署本身失败时立即回退，也可在界面上手动回退。回退会恢复被改动的文件、删除新增的文件并强制重新编译。
+- 需要联网，因此改版 Trime 声明了 `INTERNET` 权限。更新界面不对外导出，只能从该面板进入。
+- 相关源码：补丁中的 `update/ConfigUpdater.kt`、`update/ConfigUpdateActivity.kt`、`ime/switches/SwitchOptionWindow.kt` 中的入口。
+
 ## 构建与测试
 
 整套产物（改版 APK、客户端库、守护进程）由 `trime/build_apk.sh` 一次完成。前提：JDK 17、Android NDK r27d（`27.3.13750724`）、CMake 3.31.6，以及 `../../rime-llm-mac-port/` 中的 llama.cpp 与转换后的 `rime_llm_mac.cpp`（见 [llm-mac/README.md](../llm-mac/README.md)）。

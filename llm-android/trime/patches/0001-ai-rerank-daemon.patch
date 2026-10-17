@@ -24,7 +24,7 @@ index 3fe3fade..4f89cdc4 100644
  # remove kotlin null checks
  -assumenosideeffects class kotlin.jvm.internal.Intrinsics {
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 3a16667a..230b3e88 100644
+index 3a16667a..816ce3a3 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -8,8 +8,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
@@ -56,6 +56,33 @@ index 3a16667a..230b3e88 100644
  
          <service
              android:name=".ime.core.TrimeInputMethodService"
+@@ -77,6 +90,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
+             android:launchMode="singleTask"
+             android:windowSoftInputMode="adjustResize" />
+ 
++        <activity
++            android:name=".update.ConfigUpdateActivity"
++            android:exported="false"
++            android:label="更新配置"
++            android:launchMode="singleTask"
++            android:theme="@style/Theme.DialogTheme"
++            android:windowSoftInputMode="adjustResize" />
++
+         <activity
+             android:name=".ui.setup.SetupActivity"
+             android:exported="false" />
+diff --git a/app/src/main/java/com/osfans/trime/TrimeApplication.kt b/app/src/main/java/com/osfans/trime/TrimeApplication.kt
+index e9ad49d6..00d73042 100644
+--- a/app/src/main/java/com/osfans/trime/TrimeApplication.kt
++++ b/app/src/main/java/com/osfans/trime/TrimeApplication.kt
+@@ -132,6 +132,7 @@ class TrimeApplication : Application() {
+             }
+         }
+         instance = this
++        com.osfans.trime.update.ConfigUpdater.onProcessStart()
+         try {
+             if (BuildConfig.DEBUG) {
+                 Timber.plant(
 diff --git a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt b/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
 index 0867126c..77d6c69d 100644
 --- a/app/src/main/java/com/osfans/trime/ime/bar/InputBarDelegate.kt
@@ -533,7 +560,7 @@ index a01ab529..5fa3ed12 100644
      }
  }
 diff --git a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
-index 0b9b4ac8..48acf9c0 100644
+index 0b9b4ac8..819f0c92 100644
 --- a/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
 +++ b/app/src/main/java/com/osfans/trime/ime/core/TrimeInputMethodService.kt
 @@ -7,6 +7,9 @@ package com.osfans.trime.ime.core
@@ -574,7 +601,15 @@ index 0b9b4ac8..48acf9c0 100644
          val intentFilter =
              IntentFilter().apply {
                  addAction(RimeIntentReceiver.ACTION_DEPLOY)
-@@ -342,6 +365,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+@@ -183,6 +206,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
+ 
+     override fun onCreate() {
+         rime = RimeDaemon.createSession(javaClass.name)
++        com.osfans.trime.update.ConfigUpdater.runPendingDeploy()
+         lifecycleScope.launch {
+             jobs.consumeEach { it.join() }
+         }
+@@ -342,6 +366,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
          ColorManager.removeOnChangedListener(onColorChangeListener)
          super.onDestroy()
          unregisterReceiver(rimeIntentReceiver)
@@ -606,6 +641,46 @@ index 897c6e5a..0e016323 100644
      override val key: ResidentWindow.Key
          get() = KeyboardWindow
  
+diff --git a/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionEntry.kt b/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionEntry.kt
+index a51faa51..0a00456c 100644
+--- a/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionEntry.kt
++++ b/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionEntry.kt
+@@ -18,6 +18,7 @@ sealed class SwitchOptionEntry(
+         enum class Type {
+             SchemaList,
+             UpdateConfig,
++            RepoUpdate,
+             Keyboard,
+             ThemeList,
+         }
+diff --git a/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionWindow.kt b/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionWindow.kt
+index dfcd5b0f..96d110ed 100644
+--- a/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionWindow.kt
++++ b/app/src/main/java/com/osfans/trime/ime/switches/SwitchOptionWindow.kt
+@@ -62,6 +62,11 @@ class SwitchOptionWindow(di: DI) :
+                 R.drawable.ic_baseline_sync_24,
+                 SwitchOptionEntry.Static.Type.UpdateConfig,
+             ),
++            SwitchOptionEntry.Static(
++                "从仓库更新",
++                R.drawable.ic_baseline_cloud_download_24,
++                SwitchOptionEntry.Static.Type.RepoUpdate,
++            ),
+             SwitchOptionEntry.Static(
+                 context.getString(R.string.virtual_keyboard),
+                 R.drawable.ic_baseline_keyboard_24,
+@@ -120,6 +125,11 @@ class SwitchOptionWindow(di: DI) :
+                             }
+                         }
+ 
++                        SwitchOptionEntry.Static.Type.RepoUpdate -> context.startActivity(
++                            android.content.Intent(context, com.osfans.trime.update.ConfigUpdateActivity::class.java)
++                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
++                        )
++
+                         SwitchOptionEntry.Static.Type.Keyboard -> AppUtils.launchMainToKeyboard(context)
+ 
+                         SwitchOptionEntry.Static.Type.ThemeList -> showDialog { r ->
 diff --git a/app/src/main/java/com/osfans/trime/ime/symbol/AutoSpanGridLayoutManager.kt b/app/src/main/java/com/osfans/trime/ime/symbol/AutoSpanGridLayoutManager.kt
 new file mode 100644
 index 00000000..96acb0fb
@@ -1112,6 +1187,470 @@ index e30136ae..e0d468eb 100644
      override val key: ResidentWindow.Key
          get() = LiquidWindow
  
+diff --git a/app/src/main/java/com/osfans/trime/update/ConfigUpdateActivity.kt b/app/src/main/java/com/osfans/trime/update/ConfigUpdateActivity.kt
+new file mode 100644
+index 00000000..c2e49402
+--- /dev/null
++++ b/app/src/main/java/com/osfans/trime/update/ConfigUpdateActivity.kt
+@@ -0,0 +1,142 @@
++/*
++ * SPDX-FileCopyrightText: 2026 1zumiii
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++package com.osfans.trime.update
++
++import android.app.Activity
++import android.graphics.Color
++import android.graphics.Typeface
++import android.graphics.drawable.GradientDrawable
++import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
++import android.text.InputType
++import android.view.Gravity
++import android.view.ViewGroup
++import android.view.Window
++import android.widget.EditText
++import android.widget.LinearLayout
++import android.widget.ScrollView
++import android.widget.TextView
++
++/** 「从仓库更新」界面：显示当前版本，可改仓库地址与分支，立即更新或回退到上一个版本。配色与键盘面板一致（深色、圆角）。 */
++class ConfigUpdateActivity : Activity() {
++    private val ui = Handler(Looper.getMainLooper())
++    private lateinit var status: TextView
++    private lateinit var update: TextView
++    private lateinit var rollback: TextView
++
++    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
++
++    private fun round(color: Int, radiusDp: Int) = GradientDrawable().apply {
++        setColor(color)
++        cornerRadius = dp(radiusDp).toFloat()
++    }
++
++    private fun label(text: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
++        this.text = text
++        textSize = size
++        setTextColor(color)
++        if (bold) typeface = Typeface.DEFAULT_BOLD
++    }
++
++    private fun field(value: String, hintText: String, uri: Boolean) = EditText(this).apply {
++        setText(value)
++        hint = hintText
++        setHintTextColor(GRAY)
++        setTextColor(Color.WHITE)
++        textSize = 14f
++        setSingleLine()
++        if (uri) inputType = InputType.TYPE_TEXT_VARIATION_URI
++        background = round(TILE, 12)
++        setPadding(dp(14), dp(12), dp(14), dp(12))
++    }
++
++    private fun button(text: String, fill: Int, textColor: Int) = TextView(this).apply {
++        this.text = text
++        textSize = 15f
++        gravity = Gravity.CENTER
++        setTextColor(textColor)
++        background = round(fill, 14)
++        setPadding(0, dp(13), 0, dp(13))
++    }
++
++    private fun LinearLayout.addSpaced(v: android.view.View, top: Int) {
++        addView(v, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
++    }
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        requestWindowFeature(Window.FEATURE_NO_TITLE)
++        super.onCreate(savedInstanceState)
++        window.setBackgroundDrawable(round(PANEL, 24))
++        window.setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
++
++        val repoEdit = field(ConfigUpdater.repo, "仓库地址，例如 https://github.com/用户/仓库", true)
++        val branchEdit = field(ConfigUpdater.branch, "分支（默认 ${ConfigUpdater.DEFAULT_BRANCH}）", false)
++        status = label("", 13f, GRAY)
++        update = button("立即更新", Color.WHITE, TILE)
++        rollback = button("回退到上一个版本", TILE, Color.WHITE)
++
++        val col = LinearLayout(this).apply {
++            orientation = LinearLayout.VERTICAL
++            setPadding(dp(22), dp(20), dp(22), dp(20))
++            addView(label("从仓库更新", 20f, Color.WHITE, bold = true))
++            addSpaced(label("从下面的仓库下载最新配置并覆盖到输入法。更新前自动备份上一个版本，更新后连续崩溃会自动回退。词频、用户词、最近使用记录和模型不会被改动。", 13f, GRAY), 8)
++            addSpaced(repoEdit, 16)
++            addSpaced(branchEdit, 10)
++            addSpaced(update, 18)
++            addSpaced(rollback, 10)
++            addSpaced(status, 16)
++        }
++        setContentView(ScrollView(this).apply { addView(col) })
++        refresh()
++        update.setOnClickListener {
++            if (!update.isEnabled) return@setOnClickListener
++            ConfigUpdater.repo = repoEdit.text.toString()
++            ConfigUpdater.branch = branchEdit.text.toString()
++            run("正在更新…") { ConfigUpdater.update { m -> ui.post { append(m) } } }
++        }
++        rollback.setOnClickListener {
++            if (!rollback.isEnabled) return@setOnClickListener
++            run("正在回退…") { ConfigUpdater.rollback { m -> ui.post { append(m) } } }
++        }
++    }
++
++    private fun setEnabledLook(v: TextView, on: Boolean) {
++        v.isEnabled = on
++        v.alpha = if (on) 1f else 0.4f
++    }
++
++    private fun refresh() {
++        val v = ConfigUpdater.version.ifEmpty { "未通过本功能更新过" }
++        status.text = "当前版本：$v\n上一版备份：${if (ConfigUpdater.hasBackup) "有" else "无"}" +
++            ConfigUpdater.lastMessage.let { if (it.isEmpty()) "" else "\n$it" }
++        setEnabledLook(update, true)
++        setEnabledLook(rollback, ConfigUpdater.hasBackup)
++    }
++
++    private fun append(m: String) {
++        status.append("\n$m")
++    }
++
++    private fun run(start: String, job: () -> String) {
++        setEnabledLook(update, false)
++        setEnabledLook(rollback, false)
++        status.text = start
++        Thread {
++            val r = job()
++            ui.post {
++                refresh()
++                append(r)
++            }
++        }.start()
++    }
++
++    private companion object {
++        val PANEL = Color.rgb(0x3A, 0x3A, 0x3A)     // 与键盘区底色一致
++        val TILE = Color.rgb(0x1A, 0x1A, 0x1A)      // 与面板里的图标底色一致
++        val GRAY = Color.rgb(0xA8, 0xA8, 0xA8)
++    }
++}
+diff --git a/app/src/main/java/com/osfans/trime/update/ConfigUpdater.kt b/app/src/main/java/com/osfans/trime/update/ConfigUpdater.kt
+new file mode 100644
+index 00000000..45cbd37a
+--- /dev/null
++++ b/app/src/main/java/com/osfans/trime/update/ConfigUpdater.kt
+@@ -0,0 +1,294 @@
++/*
++ * SPDX-FileCopyrightText: 2026 1zumiii
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++package com.osfans.trime.update
++
++import android.content.Context
++import android.os.Handler
++import android.os.Looper
++import androidx.preference.PreferenceManager
++import com.osfans.trime.TrimeApplication
++import com.osfans.trime.daemon.RimeDaemon
++import com.osfans.trime.daemon.launchOnReady
++import com.osfans.trime.data.base.DataManager
++import org.json.JSONArray
++import org.json.JSONObject
++import java.io.ByteArrayOutputStream
++import java.io.File
++import java.net.HttpURLConnection
++import java.net.URL
++import java.util.zip.CRC32
++import java.util.zip.ZipFile
++
++/**
++ * 从 GitHub 仓库（可换成任何 fork）下载最新配置并覆盖到 Rime 用户目录。
++ * 覆盖前把被改动的文件备份一份（只保留上一个版本）；更新后 [VERIFY_MS] 内连续崩溃两次（进程在确认健康前被重启两次）自动回退。
++ * 个人数据（词频库、用户词、最近使用记录、模型、用户设置）不会被覆盖。
++ */
++object ConfigUpdater {
++    const val DEFAULT_REPO = "https://github.com/1zumiii/rime-ice-Custom"
++    const val DEFAULT_BRANCH = "custom"
++    private const val VERIFY_MS = 45_000L
++    private const val CRASHES_TO_ROLLBACK = 2
++
++    private const val PK_REPO = "cfg_update_repo"
++    private const val PK_BRANCH = "cfg_update_branch"
++    private const val PK_PENDING = "cfg_update_pending"
++    private const val PK_STARTS = "cfg_update_starts"
++    private const val PK_NEEDS_DEPLOY = "cfg_update_needs_deploy"
++    private const val PK_VERSION = "cfg_update_version"
++    private const val PK_BACKUP_VERSION = "cfg_update_backup_version"
++    private const val PK_LAST = "cfg_update_last"
++
++    // 不从仓库复制到手机的路径（与 deploy_trime.sh 的排除项一致）
++    private val EXCLUDE_PREFIX = listOf(
++        ".git/", ".github/", "others/", "windows/", "llm-mac/", "llm-android/", "llm-distill/", "tools/", "build/",
++    )
++    private val EXCLUDE_NAME = setOf(
++        ".gitignore", ".DS_Store", "AGENTS.md", "LICENSE", "install.sh", "recipe.yaml", "squirrel.yaml",
++        "squirrel.custom.yaml", "weasel.yaml", "luac.out", "recent_words.tsv", "recent_pairs.tsv",
++        "user.yaml", "installation.yaml",
++    )
++    private val EXCLUDE_SUFFIX = listOf(".gram", ".gguf")
++
++    private val main = Handler(Looper.getMainLooper())
++    private val ctx: Context get() = TrimeApplication.getInstance().directBootAwareContext
++    private val prefs get() = PreferenceManager.getDefaultSharedPreferences(ctx)
++    private val rimeDir get() = DataManager.userDataDir
++    private val backupDir get() = File(ctx.filesDir, "config_backup")
++
++    var repo: String
++        get() = prefs.getString(PK_REPO, DEFAULT_REPO) ?: DEFAULT_REPO
++        set(v) = prefs.edit().putString(PK_REPO, v.trim()).apply()
++    var branch: String
++        get() = prefs.getString(PK_BRANCH, DEFAULT_BRANCH) ?: DEFAULT_BRANCH
++        set(v) = prefs.edit().putString(PK_BRANCH, v.trim()).apply()
++    val version: String get() = prefs.getString(PK_VERSION, "") ?: ""
++    val hasBackup: Boolean get() = File(backupDir, "manifest.json").exists()
++    val lastMessage: String get() = prefs.getString(PK_LAST, "") ?: ""
++
++    /** 把用户填的地址变成压缩包地址：支持 GitHub 仓库地址、owner/repo、/tree/分支 形式，或直接给 .zip 链接。 */
++    fun zipUrl(repoText: String, branchText: String): String {
++        val t = repoText.trim()
++        if (t.endsWith(".zip")) return t
++        val m = Regex("""^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/tree/([^?#]+))?/?$""").find(t)
++            ?: throw IllegalArgumentException("无法识别的地址：$t（应为 https://github.com/用户/仓库 或 用户/仓库）")
++        val (owner, name, treeBranch) = m.destructured
++        val b = branchText.trim().ifEmpty { treeBranch.ifEmpty { "main" } }
++        return "https://codeload.github.com/$owner/$name/zip/refs/heads/$b"
++    }
++
++    private fun excluded(rel: String): Boolean {
++        if (EXCLUDE_PREFIX.any { rel.startsWith(it) }) return true
++        val name = rel.substringAfterLast('/')
++        if (name in EXCLUDE_NAME || name.startsWith("README")) return true
++        if (EXCLUDE_SUFFIX.any { name.endsWith(it) }) return true
++        return rel.contains(".userdb/")
++    }
++
++    private fun crc(f: File): Long {
++        val c = CRC32()
++        f.inputStream().buffered().use { i ->
++            val buf = ByteArray(64 * 1024)
++            while (true) {
++                val n = i.read(buf)
++                if (n < 0) break
++                c.update(buf, 0, n)
++            }
++        }
++        return c.value
++    }
++
++    private fun download(url: String, dst: File, log: (String) -> Unit) {
++        log("下载 $url")
++        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
++            connectTimeout = 15_000
++            readTimeout = 30_000
++            instanceFollowRedirects = true
++        }
++        if (conn.responseCode != 200) throw IllegalStateException("下载失败：HTTP ${conn.responseCode}（仓库不存在、分支名不对或仓库不是公开的？）")
++        conn.inputStream.use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
++        log("已下载 ${dst.length() / 1024} KB")
++    }
++
++    /** 立即更新。在后台线程调用；返回一句话结果。 */
++    @Synchronized
++    fun update(log: (String) -> Unit): String {
++        try {
++            val url = zipUrl(repo, branch)
++            val zipFile = File(ctx.cacheDir, "config_update.zip")
++            download(url, zipFile, log)
++            val changed = ArrayList<Pair<String, ByteArray?>>()   // 相对路径 → 内容（null = 从 zip 条目流式写）
++            val entries = HashMap<String, java.util.zip.ZipEntry>()
++            var commit = ""
++            ZipFile(zipFile).use { zf ->
++                commit = zf.comment?.take(7) ?: ""
++                val phone = HashMap<String, ByteArray>()      // llm-android/trime 下的手机专属文件
++                val plan = LinkedHashMap<String, ByteArray?>()
++                for (e in zf.entries()) {
++                    if (e.isDirectory) continue
++                    val rel = e.name.substringAfter('/')       // 去掉压缩包顶层目录
++                    if (rel.startsWith("llm-android/trime/") && rel.count { it == '/' } == 2) {
++                        phone[rel.substringAfterLast('/')] = zf.getInputStream(e).readBytes()
++                        continue
++                    }
++                    if (excluded(rel)) continue
++                    plan[rel] = null
++                    entries[rel] = e
++                }
++                if (plan.isEmpty()) throw IllegalStateException("压缩包里没有可用的配置文件（不是 Rime 配置仓库？）")
++                // 手机专属：*.overlay.yaml 追加到同名 .custom.yaml 末尾；*.custom.yaml 直接放进用户目录
++                val overlays = phone.filterKeys { it.endsWith(".overlay.yaml") }
++                for ((name, bytes) in phone) {
++                    if (name.endsWith(".custom.yaml") && !name.endsWith(".overlay.yaml")) plan[name] = bytes
++                }
++                for ((name, ov) in overlays) {
++                    val target = name.removeSuffix(".overlay.yaml") + ".custom.yaml"
++                    val base = plan[target]
++                        ?: entries[target]?.let { zf.getInputStream(it).readBytes() }
++                        ?: continue
++                    val sep = if (base.isNotEmpty() && base.last() != '\n'.code.toByte()) "\n".toByteArray() else ByteArray(0)
++                    plan[target] = base + sep + ov
++                }
++                // 新装默认关闭 AI（手机上手动启停）
++                plan["rime_ice.custom.yaml"]?.let {
++                    plan["rime_ice.custom.yaml"] = String(it).replace("name: ai_rerank, reset: 1,", "name: ai_rerank, reset: 0,").toByteArray()
++                } ?: entries["rime_ice.custom.yaml"]?.let { e ->
++                    val s = String(zf.getInputStream(e).readBytes()).replace("name: ai_rerank, reset: 1,", "name: ai_rerank, reset: 0,")
++                    plan["rime_ice.custom.yaml"] = s.toByteArray()
++                }
++                // 找出真正有变化的文件
++                for ((rel, bytes) in plan) {
++                    val dst = File(rimeDir, rel)
++                    val same = if (bytes != null) {
++                        dst.exists() && dst.length() == bytes.size.toLong() && dst.readBytes().contentEquals(bytes)
++                    } else {
++                        val e = entries.getValue(rel)
++                        dst.exists() && dst.length() == e.size && crc(dst) == e.crc
++                    }
++                    if (!same) changed += rel to bytes
++                }
++                log("共 ${plan.size} 个文件，${changed.size} 个有变化")
++                if (changed.isEmpty()) {
++                    prefs.edit().putString(PK_LAST, "已是最新").apply()
++                    return "已是最新，没有需要更新的文件"
++                }
++                // 备份：只保留上一个版本
++                backupDir.deleteRecursively()
++                val files = File(backupDir, "files").also { it.mkdirs() }
++                val modified = JSONArray()
++                val created = JSONArray()
++                for ((rel, _) in changed) {
++                    val dst = File(rimeDir, rel)
++                    if (dst.exists()) {
++                        File(files, rel).also { it.parentFile?.mkdirs() }.let { dst.copyTo(it, overwrite = true) }
++                        modified.put(rel)
++                    } else {
++                        created.put(rel)
++                    }
++                }
++                File(backupDir, "manifest.json").writeText(
++                    JSONObject().put("modified", modified).put("created", created).put("version", version).toString(),
++                )
++                prefs.edit().putString(PK_BACKUP_VERSION, version).apply()
++                // 写入
++                for ((rel, bytes) in changed) {
++                    val dst = File(rimeDir, rel)
++                    dst.parentFile?.mkdirs()
++                    val tmp = File(dst.path + ".new")
++                    if (bytes != null) tmp.writeBytes(bytes)
++                    else zf.getInputStream(entries.getValue(rel)).use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
++                    if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst) }
++                }
++            }
++            zipFile.delete()
++            // 进入「待确认」：45 秒内没有被连续崩溃打断才算更新成功
++            prefs.edit().putBoolean(PK_PENDING, true).putInt(PK_STARTS, 0)
++                .putString(PK_VERSION, commit.ifEmpty { "未知" }).apply()
++            scheduleConfirm()
++            deployNow(log)
++            val msg = "已更新 ${changed.size} 个文件（版本 ${commit.ifEmpty { "未知" }}），正在重新部署"
++            prefs.edit().putString(PK_LAST, msg).apply()
++            return msg
++        } catch (e: Throwable) {
++            val msg = "更新失败：${e.message ?: e.javaClass.simpleName}"
++            prefs.edit().putString(PK_LAST, msg).apply()
++            return msg
++        }
++    }
++
++    private fun deployNow(log: (String) -> Unit) {
++        val s = RimeDaemon.getFirstSessionOrNull()
++        if (s == null) {
++            prefs.edit().putBoolean(PK_NEEDS_DEPLOY, true).apply()
++            log("输入法服务未运行，下次打开键盘时自动部署")
++            return
++        }
++        s.launchOnReady {
++            try {
++                it.deploy()
++            } catch (e: Throwable) {
++                rollback { }     // 部署本身失败：立刻回退
++            }
++        }
++    }
++
++    /** 输入法服务启动时调用：补做因为服务未运行而推迟的部署。 */
++    fun runPendingDeploy() {
++        if (!prefs.getBoolean(PK_NEEDS_DEPLOY, false)) return
++        val s = RimeDaemon.getFirstSessionOrNull() ?: return
++        prefs.edit().putBoolean(PK_NEEDS_DEPLOY, false).apply()
++        s.launchOnReady { it.deploy() }
++    }
++
++    private fun scheduleConfirm() {
++        main.postDelayed({ confirmHealthy() }, VERIFY_MS)
++    }
++
++    fun confirmHealthy() {
++        if (prefs.getBoolean(PK_PENDING, false)) prefs.edit().putBoolean(PK_PENDING, false).putInt(PK_STARTS, 0).apply()
++    }
++
++    /** 进程启动时（Rime 初始化之前）调用：更新后还没确认健康就又启动了，说明上次崩溃了。 */
++    fun onProcessStart() {
++        if (!prefs.getBoolean(PK_PENDING, false)) return
++        val n = prefs.getInt(PK_STARTS, 0) + 1
++        prefs.edit().putInt(PK_STARTS, n).apply()
++        if (n >= CRASHES_TO_ROLLBACK) {
++            rollback { }
++            prefs.edit().putString(PK_LAST, "更新后连续崩溃，已自动回退到上一个版本").apply()
++        } else {
++            scheduleConfirm()
++        }
++    }
++
++    /** 回退到上一个版本：恢复被改动的文件，删掉新增的文件，然后重新部署。 */
++    @Synchronized
++    fun rollback(log: (String) -> Unit): String {
++        val mf = File(backupDir, "manifest.json")
++        if (!mf.exists()) return "没有可回退的备份"
++        return try {
++            val j = JSONObject(mf.readText())
++            val files = File(backupDir, "files")
++            val modified = j.getJSONArray("modified")
++            for (i in 0 until modified.length()) {
++                val rel = modified.getString(i)
++                val dst = File(rimeDir, rel).also { it.parentFile?.mkdirs() }
++                File(files, rel).copyTo(dst, overwrite = true)
++            }
++            val created = j.getJSONArray("created")
++            for (i in 0 until created.length()) File(rimeDir, created.getString(i)).delete()
++            backupDir.deleteRecursively()
++            File(rimeDir, "build/default.yaml").delete()   // 强制重新编译
++            prefs.edit().putBoolean(PK_PENDING, false).putInt(PK_STARTS, 0).putBoolean(PK_NEEDS_DEPLOY, true)
++                .putString(PK_VERSION, j.optString("version")).apply()
++            log("已恢复 ${modified.length()} 个文件，删除 ${created.length()} 个新增文件")
++            runPendingDeploy()
++            "已回退到上一个版本"
++        } catch (e: Throwable) {
++            "回退失败：${e.message ?: e.javaClass.simpleName}"
++        }
++    }
++}
+diff --git a/app/src/main/res/drawable/ic_baseline_cloud_download_24.xml b/app/src/main/res/drawable/ic_baseline_cloud_download_24.xml
+new file mode 100644
+index 00000000..5cf9f5d1
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_baseline_cloud_download_24.xml
+@@ -0,0 +1,10 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++  <path
++      android:fillColor="@android:color/white"
++      android:pathData="M19.35,10.04C18.67,6.59 15.64,4 12,4 9.11,4 6.6,5.64 5.35,8.04 2.34,8.36 0,10.91 0,14c0,3.31 2.69,6 6,6h13c2.76,0 5,-2.24 5,-5 0,-2.64 -2.05,-4.78 -4.65,-4.96zM17,13l-5,5 -5,-5h3V9h4v4h3z"/>
++</vector>
 diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
 index 651dfd11..6491ecb9 100644
 --- a/gradle/libs.versions.toml
