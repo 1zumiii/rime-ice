@@ -504,7 +504,6 @@ patch("static void score_batch(const std::vector<llama_token> & ctx_ids,",
       "    int n = (int)cands.size(), ctx_len = (int)ctx_ids.size(), vs = llama_n_vocab(g_vocab);\n"
       "    auto * mem = llama_get_memory(g_ctx);\n"
       "    bool use_prep = g_prep_ready && ctx_ids == g_prep_ctx && g_seq0_gen == g_prep_gen;\n"
-      "    if (!use_prep && g_score_require_prep) { g_score_skipped = true; g_score_skip_reason = \"unprepared\"; return; }\n"
       "    std::vector<float> ctx_logits;\n"
       "    if (!use_prep) {\n"
       "        llama_memory_clear(mem, false);\n"
@@ -577,5 +576,17 @@ patch("            int n_tokens = llama_tokenize(g_vocab, warmup, (int)strlen(wa
       "            else n_tokens = llama_tokenize(g_vocab, warmup, (int)strlen(warmup),\n"
       "                                           tokens, 4, true, true);")
 
+# 学生模型解码一次上文只要几毫秒：打分时遇到后台预解码持锁，最多等 30 ms 而不是直接跳过；
+# 上文没预解码好也现场解码（0.8B 的这两条保护是因为它解码上文要 40~55 ms）。
+patch("    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);\n"
+      "    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason = \"busy\"; return; }",
+      "    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);\n"
+      "    if (g_student) {\n"
+      "        for (int i = 0; i < 60 && !lock.owns_lock(); i++) {\n"
+      "            std::this_thread::sleep_for(std::chrono::microseconds(500));\n"
+      "            lock.try_lock();\n"
+      "        }\n"
+      "    }\n"
+      "    if (!lock.owns_lock()) { g_score_skipped = true; g_score_skip_reason = \"busy\"; return; }")
 open(dst, "w", encoding="utf8").write(text)
 print("ok:", dst, len(text.split("\n")), "lines")

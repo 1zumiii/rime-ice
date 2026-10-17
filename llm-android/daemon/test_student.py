@@ -57,4 +57,16 @@ for i in range(40):
     time.sleep(0.25)
 lat.sort(); n = len(lat)
 print(f"候选 6 个、含进程间通信：n={n} 跳过={skipped} 中位={lat[n//2]:.1f}ms p90={lat[int(n*0.9)]:.1f}ms 最大={lat[-1]:.1f}ms")
+# 上文没预解码好（每次换新上文、不发预解码）：学生模式应现场解码而不是跳过
+lat2, skipped2 = [], 0
+for i in range(30):
+    c2 = "我今天去公司开会第" + "一二三四五六七八九十"[i % 10] + "次" * (i // 10 + 1)
+    cands = [pool[(i * 3 + k * 7) % len(pool)] for k in range(6)]
+    if len(set(cands)) < 6: continue
+    t0 = time.time(); r = rpc(s, ["S", "0", c2] + cands); dt = (time.time() - t0) * 1000
+    if r[0] == "R": lat2.append(dt)
+    else: skipped2 += 1
+    time.sleep(0.2)
+lat2.sort(); m = len(lat2)
+print(f"上文未预解码：n={m} 跳过={skipped2} 中位={lat2[m//2]:.1f}ms 最大={lat2[-1]:.1f}ms")
 sh(f"pkill -f '[r]imellmd.*{PORT}'")
