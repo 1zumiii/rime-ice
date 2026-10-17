@@ -127,6 +127,68 @@ local function load_llm(env)
     _G.ai_rerank_llm = cpp
 end
 
+-- === 选词统计（默认关闭）===
+-- 作用：用你自己的真实输入评估重排有没有帮助（原顺序第一位被选中的比例 vs 重排后第一位被选中的比例），
+--       并为调参（候选数、二次推理、词对权重）提供依据。
+-- 内容：每次选词写一行纯数字到用户目录 select_stats.tsv：时间戳、AI 开关、模型（q = Qwen，s = 学生）、输入字母数、
+--       参与重排的候选数、所选候选在原顺序和最终顺序里的位次、上文长度档、候选字数、候选类型、是否命中缓存。
+--       不含任何输入的文字、拼音和候选文字。
+-- 开关：用户目录里存在空文件 select_stats.enabled 才记录（新开的输入会话生效）；删除该文件即停止，删除 select_stats.tsv 即清空。
+local function setup_select_stats(env)
+    local ud = user_dir()
+    if not ud then return end
+    local probe = io.open(ud .. "/select_stats.enabled", "r")
+    if not probe then _G.ai_select_stats_on = false; return end
+    probe:close()
+    _G.ai_select_stats_on = true
+    local path = ud .. "/select_stats.tsv"
+    local model_cache, model_ts = "q", 0
+    local function model_kind()
+        local now = os.time()
+        if now - model_ts > 60 then
+            model_ts = now
+            local llm = _G.ai_rerank_llm
+            if llm and llm.status then
+                local ok, s = pcall(llm.status)
+                model_cache = (ok and type(s) == "string" and s:find('"student":true', 1, true)) and "s" or "q"
+            end
+        end
+        return model_cache
+    end
+    local last_key, last_t = "", 0
+    env.engine.context.select_notifier:connect(function(ctx)
+        pcall(function()
+            local cand = ctx:get_selected_candidate()
+            if not cand then return end
+            local text = cand.text or ""
+            local input = ctx.input or ""
+            local now = os.time()
+            local key = input .. "\1" .. text
+            if key == last_key and now - last_t <= 1 then return end   -- 同一次选择被通知两次时只记一次
+            last_key, last_t = key, now
+            local seg = ctx.composition:back()
+            local sel = (seg and seg.selected_index or 0) + 1          -- 最终顺序里的位次（从 1 起）
+            local ai = ctx:get_option("ai_rerank") and 1 or 0
+            local info = _G.ai_select_info
+            local o, f, n, s1 = sel, sel, 0, "-"
+            if ai == 1 and info and info.input == input then
+                o, f, n, s1 = info.o[text] or 0, info.f[text] or sel, info.n, info.s1
+            end
+            local clen = #get_context():gsub("[\128-\191]", "")        -- 上文的字数
+            local bucket = clen == 0 and 0 or clen <= 2 and 1 or clen <= 9 and 2 or 3
+            local fh = io.open(path, "a")
+            if not fh then return end
+            if fh:seek("end") > 2 * 1024 * 1024 then
+                fh:close(); os.rename(path, path .. ".old"); fh = io.open(path, "a")
+                if not fh then return end
+            end
+            fh:write(string.format("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+                now, ai, model_kind(), #input, n, o, f, bucket, utf8.len(text) or 0, tostring(cand.type), s1))
+            fh:close()
+        end)
+    end)
+end
+
 -- === 词频（仅内存，重启即清）===
 -- 衰减算法 = librime user_dictionary 调频同源：
 --   提交: dee = 1 + dee·exp((t_old - t_now)/200)；查询: eff = dee·exp((t_word - t_now)/200)
@@ -234,6 +296,6 @@ end
 
 -- 会话创建时就加载并同步一次开关（之前要等第一次按键才加载：在那之前点安卓徽标切换开关，守护进程收不到，表现为第一次点击失效）
 return setmetatable({
-    init = function(env) pcall(load_llm, env) end,
+    init = function(env) pcall(load_llm, env); pcall(setup_select_stats, env) end,
     func = processor,
 }, { __call = function(_, key, env) return processor(key, env) end })   -- 仍可当函数直接调用（测试脚本这样用）

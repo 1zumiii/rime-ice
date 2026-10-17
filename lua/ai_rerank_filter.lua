@@ -495,6 +495,7 @@ return function(translation, env)
     end
     if not env.engine.context:get_option("ai_rerank") then
         dbg("filter called: switch OFF in this session")
+        _G.ai_select_info = nil   -- 选词统计：本次没有重排，按原顺序记
         for cand in translation:iter() do yield(cand) end
         return
     end
@@ -520,6 +521,15 @@ return function(translation, env)
         append_line("llm_errors.txt", os.date("%H:%M:%S") .. " " .. tostring(err))
     end
     if not ok or #cap == 0 then cap = native end
+
+    -- 选词统计（见 ai_rerank_processor 的 select_stats）：只记每个候选在原始顺序和最终顺序里的位次，不记文字内容之外的任何东西
+    if _G.ai_select_stats_on then
+        local o, fpos = {}, {}
+        for i, c in ipairs(native) do if not o[c.text] then o[c.text] = i end end
+        for i, c in ipairs(cap) do if not fpos[c.text] then fpos[c.text] = i end end
+        _G.ai_select_info = { input = env.engine.context.input or "", o = o, f = fpos, n = #native,
+                              s1 = flags.s1 or "-", s2 = flags.s2 or "-" }
+    end
 
     if cfg.debug_latency then
         local input = env.engine.context.input or ""

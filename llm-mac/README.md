@@ -125,6 +125,7 @@ llm-mac/install_llm.sh           # rime_llm.so 与模型（校验模型 SHA-256 
 
 - `smoke_test.lua`：模块接口（无需模型）
 - `model_test.lua`：模型打分合理性与耗时
+- `select_stats_test.lua`：选词统计的单元测试（无需模型）：开关文件、纯数字、位次、去重、过期信息
 - `pairs_test.lua`：个人词对与最近使用过滤器的单元测试（无需模型）：时间窗、衰减、持久化、压缩、词对优先、可关闭
 - `filter_test.lua`：使用模拟的 Rime 环境，对过滤器与处理器做端到端测试（开关、两音节重排、四字两阶段、空上文、scan_limit、编辑键重置、不写明文文件）
 
