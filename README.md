@@ -113,7 +113,7 @@
 
 已开启平翘舌（z/zh、c/ch、s/sh）和前后鼻音（an/ang、en/eng、in/ing）。规则位于 `algebra_extra.yaml`，由 `tools/gen_typo_rules.py` 生成。需要关闭某一组时，在脚本中注释对应行并重新生成。
 
-脚本中另有“相邻按键误触容错”，默认关闭。实测它会误吞“完整拼音夹带缩写”的输入，因此不启用。
+同时开启“相邻按键误触容错”：只处理 4 个字母及以上的音节，末字母只允许换成 i、u、v，以避免把两个字吞成一个。邻键替换类错拼的首选命中率由 0.7% 提高到 32.9%，吞字比例约 0.3%–2.6%。数据与取舍见 `docs/typo-tolerance.md`。
 
 ### 其他小改动
 
@@ -206,7 +206,7 @@ git commit
 | 位置 | 内容 |
 | --- | --- |
 | `rime_ice.custom.yaml`、`default.custom.yaml`、`squirrel.custom.yaml` | 方案、全局和外观补丁 |
-| `algebra_extra.yaml`、`tools/gen_typo_rules.py` | 模糊音与（默认关闭的）邻键容错规则 |
+| `algebra_extra.yaml`、`tools/gen_typo_rules.py` | 模糊音与邻键容错规则 |
 | `lua/recent_boost_filter.lua` | 最近使用优先 |
 | `lua/ai_rerank_filter.lua`、`lua/ai_rerank_processor.lua` | AI 重排的过滤器与处理器 |
 | `lua/model_badge_filter.lua` | 整句候选的 `❖` 标记 |
